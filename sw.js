@@ -2,7 +2,7 @@
  * - Navigations (index.html) are network-first so a new release is picked up immediately.
  * - Versioned assets (?v=) are cache-first; the version query guarantees HTML and JS never mix.
  */
-const VERSION = '1.6.2';
+const VERSION = '1.6.3';
 const CACHE = 'orderviewer-' + VERSION;
 const V = '?v=' + VERSION;
 const ASSETS = [

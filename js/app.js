@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.6.2';
+  const APP_VERSION = '1.6.3';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -445,12 +445,14 @@
     document.documentElement.style.setProperty('--bar-h', document.querySelector('.appbar').offsetHeight + 'px');
     state.drawerOpen = true;
     $('btnMenu').classList.add('open');
+    $('fab').classList.add('hide');
     $('drawerBg').hidden = false; $('drawer').hidden = false;
     requestAnimationFrame(() => { $('drawerBg').classList.add('show'); $('drawer').classList.add('show'); });
   }
   function closeDrawer() {
     state.drawerOpen = false;
     $('btnMenu').classList.remove('open');
+    $('fab').classList.remove('hide');
     $('drawerBg').classList.remove('show'); $('drawer').classList.remove('show');
     setTimeout(() => { $('drawerBg').hidden = true; $('drawer').hidden = true; }, 240);
   }

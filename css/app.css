@@ -102,6 +102,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
   transition: transform .12s, box-shadow .12s;
 }
 .fab:active { transform: scale(.94); }
+.fab.hide { display: none; }
 .fab svg { width: 21px; height: 21px; }
 .fab .dot { position: absolute; top: 2px; right: 2px; width: 11px; height: 11px; border-radius: 50%; background: #ffb300; border: 2px solid #fff; }
 
@@ -654,3 +655,17 @@ body.land .hero h1 { font-size: 18px; }
 body.land .changes { max-width: 900px; margin: 0 auto; }
 body.land .chg-actions { grid-template-columns: 2fr 1fr 1fr 1fr; }
 body.land .chg-actions button.primary { grid-column: auto; }
+
+/* ---------- portrait: menu button and drawer on the right ---------- */
+body:not(.land) #btnMenu { order: 10; margin-left: 2px; }
+body:not(.land) .appbar-title { padding-left: 8px; }
+body:not(.land) .drawer {
+  left: auto; right: 0;
+  transform: translateX(102%);
+  box-shadow: -10px 0 40px rgba(0,0,0,.35);
+  padding-left: 0; padding-right: var(--sar);
+}
+body:not(.land) .drawer.show { transform: none; }
+body:not(.land) .drawer-item { border-radius: 26px 0 0 26px; margin-left: 12px; padding: 10px 18px 10px 14px; }
+body:not(.land) .drawer-item.on::before { left: auto; right: 0; border-radius: 3px 0 0 3px; }
+body:not(.land) .drawer-foot .drawer-item { margin-left: 12px; }
