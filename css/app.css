@@ -525,7 +525,7 @@ svg { display: block; }
 .grid.sched .frozen-c { box-shadow: inset -2px 0 0 var(--green-mid); }
 
 /* ---------- Excel-like column filter ---------- */
-.grid td.fh { cursor: pointer; position: relative; }
+.grid td.fh { cursor: pointer; }
 .grid td.fh.filt { background: var(--green-mid) !important; color: var(--green-deep); }
 .grid td.fh .fi { position: absolute; right: 2px; bottom: 2px; width: 12px; height: 12px; color: var(--green-deep); opacity: .9; }
 .grid td.fh .fi svg { width: 12px; height: 12px; }
