@@ -121,6 +121,8 @@
       <input id="searchInput" type="search" placeholder="品番・品名・値で絞り込み" autocomplete="off" autocorrect="off" enterkeyhint="search" />
       <button class="iconbtn clear" id="searchClear" title="クリア"><svg><use href="#i-x"/></svg></button>
     </label>
+    <div class="psec-row" id="filtHead" hidden><div class="psec">列フィルター<small class="psub">表の見出しセルをタップして設定</small></div><button class="linkbtn" id="filtClear">すべて解除</button></div>
+    <div class="fpills" id="filtList" hidden></div>
     <div class="psec-row" id="ltHead" hidden><div class="psec">発注L/T フィルター<small class="psub" id="ltDesc">発注L/T×2（営業日）以内に所要・発注がない品番を隠す</small></div><button class="switch" id="ltSw"></button></div>
     <div class="psec-row" id="colsHead" hidden><div class="psec">表の列（表示/非表示）</div><button class="linkbtn" id="colsReset">初期状態に戻す</button></div>
     <div class="collist" id="colsList" hidden></div>
@@ -140,6 +142,30 @@
     <div class="opt"><div class="l">対象外のシートも表示<small>設定・在庫警告・所要など全シートをメニューに出します</small></div><button class="switch" data-opt="allSheets"></button></div>
     <div class="opt"><div class="l">起動時に前回のファイルを開く</div><button class="switch" data-opt="autoOpen"></button></div>
     <button class="dangerbtn" id="clearCache">保存したファイルを削除</button>
+  </div>
+
+  <!-- bottom: column filter (Excel-like) -->
+  <div class="sheet-bg" id="cfBg" hidden></div>
+  <div class="panel cf" id="cf" hidden>
+    <div class="grip"></div>
+    <div class="panel-title"><h2 id="cfTitle">フィルター</h2><button class="iconbtn" id="cfClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <label class="search cf-search"><svg><use href="#i-search"/></svg><input id="cfSearch" type="search" placeholder="値を検索" autocomplete="off" /></label>
+    <div class="cf-tools">
+      <button class="fchip" id="cfAll">すべて選択</button>
+      <button class="fchip" id="cfNone">すべて解除</button>
+      <button class="fchip" id="cfNonEmpty">空白・0 を除く</button>
+    </div>
+    <div class="cf-range" id="cfRange" hidden>
+      <span>数値</span>
+      <input id="cfMin" type="number" inputmode="decimal" placeholder="以上" />
+      <span>〜</span>
+      <input id="cfMax" type="number" inputmode="decimal" placeholder="以下" />
+    </div>
+    <div class="cf-list" id="cfList"></div>
+    <div class="cf-foot">
+      <button class="cf-clear" id="cfReset">解除</button>
+      <button class="cf-apply" id="cfApply">適用</button>
+    </div>
   </div>
 
   <!-- bottom: about -->
