@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.5.2';
+  const APP_VERSION = '1.6.0';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -22,7 +22,7 @@
   // ---------------------------------------------------------------- state
   const defaults = {
     hideEmptyRows: true, hideEmptyCols: true, showHeaders: false, showFills: true,
-    allSheets: false, autoOpen: true, fontScale: 1, ltFilter: true,
+    allSheets: false, autoOpen: true, fontScale: 1, ltFilter: true, orient: 'auto',
   };
   const state = {
     opts: Object.assign({}, defaults),
@@ -42,7 +42,11 @@
     split: false,
     splitRatio: 0.5,
     splitNames: [null, null],
-    colFilters: {}, // sheetName -> { col: { values: [..]|null, nonEmpty: bool, min: n|null, max: n|null } }
+    colFilters: {}, // sheetName -> { col: { values: [..]|null, nonEmpty: bool, min: n|null, max: n|null, grp: 'order'|'demand'|null } }
+    editsByFile: {}, // fileName -> { sheetName -> { "r,c": { v, orig, at } } }
+    edits: {},       // edits of the open file (alias into editsByFile)
+    editVer: 0,
+    drawerOpen: false,
   };
   const pane = () => state.panes[state.active];
   Object.defineProperty(state, 'sheetIdx', { get: () => pane().idx, set: (v) => { pane().idx = v; } });
@@ -61,13 +65,14 @@
         state.splitRatio = p.splitRatio || 0.5;
         state.splitNames = p.splitNames || [null, null];
         state.colFilters = p.colFilters || {};
+        state.editsByFile = p.editsByFile || {};
       }
     } catch (e) { /* ignore */ }
   }
   function savePrefs() {
     try {
       const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, editsByFile: state.editsByFile }));
     } catch (e) { /* ignore */ }
   }
 
@@ -351,6 +356,9 @@
       state.book = book;
       state.prepared.clear();
       state.fileMeta = meta;
+      state.edits = state.editsByFile[meta.name] || {};
+      state.editsByFile[meta.name] = state.edits;
+      state.editVer++;
       const targets = targetSheets();
       if (!targets.length) throw new Error('表示対象のシート（直近・所要(調整)より右）が見つかりませんでした。');
       if (!fromCache) {
@@ -420,7 +428,7 @@
     $('viewer').hidden = true;
     $('fab').hidden = true;
     $('ttlSheet').textContent = 'Order View';
-    $('ttlFile').textContent = state.fileMeta ? `読み込み中: ${state.fileMeta.name}` : 'ファイルを選択してください';
+    $('ttlFile').textContent = state.fileMeta ? state.fileMeta.name : 'ファイルを選択してください';
     $('count').textContent = '';
     hideCellInfo();
     refreshRecentButton();
@@ -434,16 +442,26 @@
   // ---------------------------------------------------------------- drawer
   function openDrawer() {
     renderDrawer();
+    document.documentElement.style.setProperty('--bar-h', document.querySelector('.appbar').offsetHeight + 'px');
+    state.drawerOpen = true;
+    $('btnMenu').classList.add('open');
     $('drawerBg').hidden = false; $('drawer').hidden = false;
     requestAnimationFrame(() => { $('drawerBg').classList.add('show'); $('drawer').classList.add('show'); });
   }
   function closeDrawer() {
+    state.drawerOpen = false;
+    $('btnMenu').classList.remove('open');
     $('drawerBg').classList.remove('show'); $('drawer').classList.remove('show');
     setTimeout(() => { $('drawerBg').hidden = true; $('drawer').hidden = true; }, 240);
   }
   function renderDrawer() {
-    $('drawerFile').textContent = state.fileMeta ? state.fileMeta.name : 'ファイル未選択';
+    $('drawerFile').textContent = state.fileMeta ? state.fileMeta.name : '';
     $('drawerVer').textContent = 'Ver ' + APP_VERSION;
+    const nEd = editCount();
+    const cn = $('drawerChangesN');
+    cn.textContent = `${nEd}件`;
+    cn.className = nEd ? 'chg' : 'n0';
+    $('drawerChanges').classList.toggle('on', $('home').hidden && pane().idx === CHANGES_IDX);
     const list = $('drawerSheets');
     list.innerHTML = '';
     if (!state.book) { list.appendChild(el('div', 'drawer-empty', 'ファイルを読み込むとシートが表示されます')); return; }
@@ -518,15 +536,15 @@
     hideCellInfo();
     const m0 = state.prepared.get(state.panes[0].idx);
     if (!state.split) {
-      if (!m0) return;
-      $('ttlSheet').textContent = m0.sheet.name;
-      $('ttlFile').textContent = state.query ? `検索: ${state.query}` : (state.fileMeta ? `${state.fileMeta.name} · ${fmtDateTime(state.fileMeta.savedAt)}` : '');
+      if (!m0 && state.panes[0].idx !== CHANGES_IDX) return;
+      $('ttlSheet').textContent = state.panes[0].idx === CHANGES_IDX ? '変更内容' : m0.sheet.name;
+      setHeaderStatus(m0);
       renderPane(0, viewer, false);
       return;
     }
     const m1 = state.prepared.get(state.panes[1].idx);
-    $('ttlSheet').textContent = [m0, m1].map((m) => (m ? m.sheet.name : '—')).join(' / ');
-    $('ttlFile').textContent = state.query ? `検索: ${state.query}` : '分割ビュー';
+    $('ttlSheet').textContent = [0, 1].map((i) => (state.panes[i].idx === CHANGES_IDX ? '変更内容' : [m0, m1][i] ? [m0, m1][i].sheet.name : '—')).join(' / ');
+    setHeaderStatus(state.prepared.get(pane().idx), '分割ビュー');
     $('count').textContent = '';
     const split = el('div', 'split');
     split.style.setProperty('--ratio', state.splitRatio);
@@ -546,11 +564,12 @@
   function renderPane(i, container, withBar) {
     const pn = state.panes[i];
     const m = state.prepared.get(pn.idx);
+    const isChanges = pn.idx === CHANGES_IDX;
     if (withBar) {
       const bar = el('div', 'pane-bar');
       const nameBtn = el('button', 'pname');
       nameBtn.appendChild(el('span', 'tag', i === 0 ? '上' : '下'));
-      nameBtn.appendChild(el('span', null, m ? m.sheet.name : 'シートを選択'));
+      nameBtn.appendChild(el('span', null, isChanges ? '変更内容' : m ? m.sheet.name : 'シートを選択'));
       nameBtn.appendChild(svgUse('i-chev'));
       nameBtn.addEventListener('click', () => { state.active = i; openDrawer(); });
       bar.appendChild(nameBtn);
@@ -574,6 +593,7 @@
     const body = el('div', 'pane-body');
     body._countEl = container._countEl || null;
     container.appendChild(body);
+    if (isChanges) { renderChanges(body); return; }
     if (!m) {
       const em = el('div', 'pane-empty');
       em.appendChild(el('div', null, 'このペインに表示するシートを選んでください'));
@@ -594,16 +614,28 @@
     target.textContent = text;
   }
 
+  /** screen → app coordinates (the app may be CSS-rotated for the landscape/portrait modes) */
+  function toApp(x, y) {
+    if (document.body.classList.contains('rot90')) return [y, window.innerWidth - x];
+    if (document.body.classList.contains('rotm90')) return [window.innerHeight - y, x];
+    return [x, y];
+  }
   function attachSplitDrag(split, handle) {
     let dragging = false;
-    const move = (y) => {
+    const move = (cx, cy) => {
+      const land = document.body.classList.contains('land');
       const r = split.getBoundingClientRect();
-      const ratio = Math.max(0.18, Math.min(0.82, (y - r.top - handle.offsetHeight / 2) / (r.height - handle.offsetHeight)));
+      const a = toApp(r.left, r.top), b = toApp(r.right, r.bottom);
+      const minX = Math.min(a[0], b[0]), maxX = Math.max(a[0], b[0]), minY = Math.min(a[1], b[1]), maxY = Math.max(a[1], b[1]);
+      const [px, py] = toApp(cx, cy);
+      const hs = land ? handle.offsetWidth : handle.offsetHeight;
+      const raw = land ? (px - minX - hs / 2) / (maxX - minX - hs) : (py - minY - hs / 2) / (maxY - minY - hs);
+      const ratio = Math.max(0.18, Math.min(0.82, raw));
       state.splitRatio = Math.round(ratio * 1000) / 1000;
       split.style.setProperty('--ratio', state.splitRatio);
     };
     handle.addEventListener('pointerdown', (e) => { dragging = true; handle.classList.add('drag'); handle.setPointerCapture(e.pointerId); e.preventDefault(); });
-    handle.addEventListener('pointermove', (e) => { if (dragging) move(e.clientY); });
+    handle.addEventListener('pointermove', (e) => { if (dragging) move(e.clientX, e.clientY); });
     const end = () => { if (!dragging) return; dragging = false; handle.classList.remove('drag'); savePrefs(); for (const t of split.querySelectorAll('table.grid')) stickyOffsets(t); };
     handle.addEventListener('pointerup', end);
     handle.addEventListener('pointercancel', end);
@@ -678,6 +710,69 @@
     }
     return d;
   }
+  /** 品番 groups (所要/発注/在庫 rows) of a requirement sheet, with an effective 発注L/T. */
+  function sheetGroups(m) {
+    if (m._groups) return m._groups;
+    const cfg = m.gridConfig;
+    m._groupByRow = new Map();
+    if (!cfg || !cfg.keyCols.length) return (m._groups = []);
+    const keyCol = cfg.keyCols[0];
+    const nameCol = cfg.keyCols[1] || 0;
+    const modelCol = (cfg.heads.find((h) => /代表機種/.test(h.text)) || {}).c || 0;
+    const lotCol = (cfg.heads.find((h) => /最小生産|ﾛｯﾄ|ロット/.test(h.text)) || {}).c || 0;
+    const num = (cl) => (cl && cl.t === 'n' && cl.v != null ? cl.v : parseFloat(m.text(cl)) || 0);
+    const vis = [];
+    for (let r = m.headerRow + 1; r <= m.sheet.maxRow; r++) if (!m.hiddenRow(r) && m.rowHasValue[r]) vis.push(r);
+    const groups = [];
+    let i = 0;
+    while (i < vis.length) {
+      const k = m.text(m.cell(vis[i], keyCol));
+      const rows = [];
+      while (i < vis.length && m.text(m.cell(vis[i], keyCol)) === k) rows.push(vis[i++]);
+      const kb = (r) => (cfg.kubunCol ? m.text(m.cell(r, cfg.kubunCol)) : '');
+      const g = {
+        key: k, rows,
+        name: nameCol ? m.text(m.cell(rows[0], nameCol)) : '',
+        model: modelCol ? m.text(m.cell(rows[0], modelCol)) : '',
+        lot: lotCol ? num(m.cell(rows[0], lotCol)) : 0,
+        stockRow: rows.find((r) => /在庫/.test(kb(r))) || null,
+        demandRow: rows.find((r) => /所要/.test(kb(r))) || null,
+        orderRow: rows.find((r) => /発注/.test(kb(r))) || null,
+        ltRaw: cfg.ltCol ? num(m.cell(rows[0], cfg.ltCol)) : 0,
+        lt: 0, ltSource: 'raw',
+      };
+      g.lt = g.ltRaw;
+      groups.push(g);
+      for (const r of rows) m._groupByRow.set(r, g);
+    }
+    // effective L/T for groups whose 発注L/T is 0 or blank:
+    // 1) same 代表機種, 2) closest 品名 (longest common prefix ≥ 3), 3) the longest L/T on the sheet
+    const known = groups.filter((g) => g.ltRaw > 0);
+    const maxLt = known.reduce((a, g) => Math.max(a, g.ltRaw), 0);
+    const norm = (t) => String(t || '').replace(/[\s　]/g, '').toLowerCase();
+    for (const g of groups) {
+      if (g.ltRaw > 0) continue;
+      let pick = null;
+      if (g.model) pick = known.find((o) => o.model && o.model === g.model) || null;
+      if (pick) { g.lt = pick.ltRaw; g.ltSource = `代表機種 ${g.model} と同じ`; continue; }
+      const gn = norm(g.name);
+      let best = null, bestLen = 2;
+      if (gn.length >= 3) {
+        for (const o of known) {
+          const on = norm(o.name);
+          let l = 0;
+          while (l < gn.length && l < on.length && gn[l] === on[l]) l++;
+          if (l > bestLen) { bestLen = l; best = o; }
+        }
+      }
+      if (best) { g.lt = best.ltRaw; g.ltSource = `類似品名「${best.name}」と同じ`; continue; }
+      g.lt = maxLt; g.ltSource = maxLt ? 'シート内の最長L/T' : 'L/Tなし';
+    }
+    m._groups = groups;
+    return groups;
+  }
+  function groupOfRow(m, r) { sheetGroups(m); return m._groupByRow.get(r) || null; }
+
   /** Rows (品番 groups) that have no 所要/発注 within 発注L/T×2 business days from today. */
   function ltHiddenRows(m) {
     const cfg = m.gridConfig;
@@ -686,23 +781,15 @@
     const key = today + ':' + m.sheet.maxRow;
     if (m._ltCache && m._ltCache.key === key) return m._ltCache;
     const hidden = new Set();
-    const keyCol = cfg.keyCols[0];
     const dateCols = cfg.heads.filter((h) => h.serial !== null && h.serial !== undefined && h.c >= cfg.dayCol);
-    let groups = 0, hiddenGroups = 0;
-    const vis = [];
-    for (let r = m.headerRow + 1; r <= m.sheet.maxRow; r++) if (!m.hiddenRow(r) && m.rowHasValue[r]) vis.push(r);
-    let i = 0;
-    while (i < vis.length) {
-      const k = m.text(m.cell(vis[i], keyCol));
-      const rows = [];
-      while (i < vis.length && m.text(m.cell(vis[i], keyCol)) === k) rows.push(vis[i++]);
-      groups++;
-      const ltCell = m.cell(rows[0], cfg.ltCol);
-      const lt = ltCell && ltCell.t === 'n' ? ltCell.v : parseFloat(m.text(ltCell)) || 0;
-      const end = addBusinessDays(today, lt * 2);
+    const groups = sheetGroups(m);
+    let hiddenGroups = 0, estimated = 0;
+    for (const g of groups) {
+      if (g.ltRaw <= 0 && g.lt > 0) estimated++;
+      const end = addBusinessDays(today, g.lt * 2);
       let has = false;
+      const rows = cfg.kubunCol ? [g.demandRow, g.orderRow].filter(Boolean) : g.rows;
       for (const row of rows) {
-        if (cfg.kubunCol) { const kb = m.text(m.cell(row, cfg.kubunCol)); if (!/所要|発注/.test(kb)) continue; }
         const dayCell = m.cell(row, cfg.dayCol);
         if (dayCell && dayCell.t === 'n' && dayCell.v !== null && dayCell.v !== undefined && dayCell.v !== 0) { has = true; break; }
         for (const h of dateCols) {
@@ -713,11 +800,330 @@
         }
         if (has) break;
       }
-      if (!has) { hiddenGroups++; for (const row of rows) hidden.add(row); }
+      if (!has) { hiddenGroups++; for (const row of g.rows) hidden.add(row); }
     }
-    m._ltCache = { key, hidden, groups, hiddenGroups };
+    m._ltCache = { key, hidden, groups: groups.length, hiddenGroups, estimated };
     return m._ltCache;
   }
+
+  // ---------------------------------------------------------------- quantity edits (所要 / 発注) with derived 在庫
+  const CHANGES_IDX = -2;
+  function sheetEdits(m) { return state.edits[m.sheet.name] || {}; }
+  function editCount() { return Object.values(state.edits).reduce((a, o) => a + Object.keys(o).length, 0); }
+  function rawNum(m, r, c) { const cl = m.cell(r, c); return cl && cl.t === 'n' && cl.v != null ? cl.v : (parseFloat(m.text(cl)) || 0); }
+  function setEdit(m, r, c, v) {
+    const ed = Object.assign({}, sheetEdits(m));
+    const key = r + ',' + c;
+    const orig = rawNum(m, r, c);
+    if (v === null || v === undefined || Number.isNaN(v) || v === orig) delete ed[key];
+    else ed[key] = { v, orig, at: Date.now() };
+    if (Object.keys(ed).length) state.edits[m.sheet.name] = ed; else delete state.edits[m.sheet.name];
+    if (state.fileMeta) state.editsByFile[state.fileMeta.name] = state.edits;
+    state.editVer++;
+    savePrefs();
+  }
+  function derivedMap(m) {
+    if (m._derived && m._derived.ver === state.editVer) return m._derived.map;
+    const map = new Map();
+    const cfg = m.gridConfig;
+    const ed = sheetEdits(m);
+    if (cfg) {
+      for (const [key, e] of Object.entries(ed)) {
+        const [r, c] = key.split(',').map(Number);
+        const g = groupOfRow(m, r);
+        if (!g || !g.stockRow) continue;
+        const kb = cfg.kubunCol ? m.text(m.cell(r, cfg.kubunCol)) : '';
+        const sign = /発注/.test(kb) ? 1 : -1;
+        const delta = (e.v - e.orig) * sign;
+        for (const h of cfg.heads) {
+          if (h.c < c || h.serial === null || h.serial === undefined) continue;
+          const k2 = g.stockRow + ',' + h.c;
+          map.set(k2, (map.get(k2) || 0) + delta);
+        }
+      }
+    }
+    m._derived = { ver: state.editVer, map };
+    return map;
+  }
+  function effVal(m, r, c) {
+    const key = r + ',' + c;
+    const e = sheetEdits(m)[key];
+    if (e) return { v: e.v, orig: e.orig, kind: 'edit' };
+    const d = derivedMap(m).get(key);
+    if (d) { const orig = rawNum(m, r, c); return { v: orig + d, orig, kind: 'stock' }; }
+    return null;
+  }
+  function fmtQty(v) { return Number.isInteger(v) ? String(v) : String(Math.round(v * 10) / 10); }
+  function isEditable(m, r, c) {
+    const cfg = m.gridConfig;
+    if (!cfg || r <= m.headerRow || c < cfg.dayCol) return false;
+    const hh = cfg.heads[c - 1];
+    if (!hh || hh.serial === null || hh.serial === undefined) return false;
+    if (!cfg.kubunCol) return false;
+    return /所要|発注/.test(m.text(m.cell(r, cfg.kubunCol)));
+  }
+  let edCtx = null;
+  function openEditor(m, r, c) {
+    const cfg = m.gridConfig;
+    const g = groupOfRow(m, r);
+    const cur = effVal(m, r, c);
+    const orig = cur ? cur.orig : rawNum(m, r, c);
+    const val = cur ? cur.v : orig;
+    const hh = cfg.heads[c - 1];
+    const pd = NumFmt.serialToDate(hh.serial);
+    const kb = m.text(m.cell(r, cfg.kubunCol));
+    edCtx = { m, r, c, orig, lot: g ? g.lot : 0, kb, date: `${pd.M}/${pd.d}（${['日', '月', '火', '水', '木', '金', '土'][pd.wd]}）` };
+    $('edName').textContent = `${g ? g.key : ''} ${g ? g.name : ''}`.trim() || `${XlsxLite.indexToCol(c)}${r}`;
+    $('edSub').textContent = `${m.sheet.name} · ${kb} · ${edCtx.date}`;
+    $('edOrig').textContent = fmtQty(orig);
+    $('edLot').textContent = edCtx.lot ? `最小ロット ${fmtQty(edCtx.lot)}` : '';
+    $('edVal').value = fmtQty(val);
+    const q = $('edQuick');
+    q.innerHTML = '';
+    const quick = [['0 にする', () => 0]];
+    if (edCtx.lot) { quick.push([`+ロット (${fmtQty(edCtx.lot)})`, (x) => x + edCtx.lot]); quick.push([`−ロット`, (x) => Math.max(0, x - edCtx.lot)]); }
+    quick.push(['+10', (x) => x + 10], ['+100', (x) => x + 100]);
+    for (const [label, fn] of quick) {
+      const b = el('button', 'fchip', label);
+      b.addEventListener('click', () => { const x = parseFloat($('edVal').value) || 0; $('edVal').value = fmtQty(fn(x)); updateEdNote(); });
+      q.appendChild(b);
+    }
+    updateEdNote();
+    openPanel('ed', 'edBg');
+    setTimeout(() => { $('edVal').focus(); $('edVal').select(); }, 260);
+  }
+  function updateEdNote() {
+    if (!edCtx) return;
+    const v = parseFloat($('edVal').value);
+    const note = $('edNote');
+    if (Number.isNaN(v)) { note.textContent = '数値を入力してください'; return; }
+    const d = v - edCtx.orig;
+    if (d === 0) { note.textContent = '変更なし（元の値と同じ）'; return; }
+    const sign = /発注/.test(edCtx.kb) ? 1 : -1;
+    const sd = d * sign;
+    note.textContent = `${edCtx.kb} ${fmtQty(edCtx.orig)} → ${fmtQty(v)}（${d > 0 ? '+' : ''}${fmtQty(d)}）。在庫は ${edCtx.date} 以降 ${sd > 0 ? '+' : ''}${fmtQty(sd)} で再計算されます`;
+  }
+  function saveEditor() {
+    if (!edCtx) return;
+    const v = parseFloat($('edVal').value);
+    if (Number.isNaN(v)) { toast('数値を入力してください', true); return; }
+    setEdit(edCtx.m, edCtx.r, edCtx.c, v);
+    closePanel('ed', 'edBg');
+    edCtx = null;
+    render();
+  }
+
+  // ---------------------------------------------------------------- changes page (変更内容)
+  function showChanges(paneNo) {
+    if (paneNo === undefined) paneNo = state.active;
+    state.panes[paneNo].idx = CHANGES_IDX;
+    showViewer();
+    render();
+  }
+  function collectChanges() {
+    const out = [];
+    for (const [sheetName, ed] of Object.entries(state.edits)) {
+      const meta = state.book ? state.book.sheets.find((t) => t.name === sheetName) : null;
+      const m = meta ? state.prepared.get(meta.index) : null;
+      for (const [key, e] of Object.entries(ed)) {
+        const [r, c] = key.split(',').map(Number);
+        const it = { sheet: sheetName, r, c, orig: e.orig, v: e.v, at: e.at, key: '', name: '', kb: '', serial: null, ref: `${XlsxLite.indexToCol(c)}${r}`, loaded: !!m };
+        if (m && m.gridConfig) {
+          const g = groupOfRow(m, r);
+          if (g) { it.key = g.key; it.name = g.name; }
+          it.kb = m.gridConfig.kubunCol ? m.text(m.cell(r, m.gridConfig.kubunCol)) : '';
+          const hh = m.gridConfig.heads[c - 1];
+          if (hh && hh.serial != null) it.serial = hh.serial;
+        }
+        out.push(it);
+      }
+    }
+    out.sort((a, b) => a.sheet.localeCompare(b.sheet, 'ja') || a.r - b.r || a.c - b.c);
+    return out;
+  }
+  function dateLabel(serial) { if (serial == null) return ''; const p = NumFmt.serialToDate(serial); return `${p.M}/${p.d}`; }
+  function dateISO(serial) { if (serial == null) return ''; const p = NumFmt.serialToDate(serial); return `${p.y}/${String(p.M).padStart(2, '0')}/${String(p.d).padStart(2, '0')}`; }
+  async function ensureChangeModels() {
+    if (!state.book) return;
+    for (const sheetName of Object.keys(state.edits)) {
+      const meta = state.book.sheets.find((t) => t.name === sheetName);
+      if (meta && !state.prepared.get(meta.index)) { overlay(true, `シート「${sheetName}」を読み込み中…`, 50); await tick(); await getModel(meta.index); }
+    }
+    overlay(false);
+  }
+  function renderChanges(container) {
+    const items = collectChanges();
+    if (items.some((it) => !it.loaded) && state.book) {
+      container.appendChild(el('div', 'chg-empty', '読み込み中…'));
+      ensureChangeModels().then(() => render());
+      return;
+    }
+    const scroller = el('div', 'scroller');
+    const box = el('div', 'changes');
+    const sum = el('div', 'chg-sum');
+    sum.appendChild(el('h2', null, items.length ? `変更 ${items.length} 件` : '変更はありません'));
+    const sheets = [...new Set(items.map((it) => it.sheet))];
+    sum.appendChild(el('p', null, items.length ? `${sheets.map((n) => `${n} ${items.filter((it) => it.sheet === n).length}件`).join(' / ')}${state.fileMeta ? ' · ' + state.fileMeta.name : ''}` : '業者シートの表で「所要」「発注」の数量セルをタップすると変更できます。変更した数量に合わせて在庫も再計算されます。'));
+    box.appendChild(sum);
+    if (items.length) {
+      const act = el('div', 'chg-actions');
+      const bShare = el('button', 'primary'); bShare.appendChild(svgUse('i-mail')); bShare.appendChild(document.createTextNode('Excel を添付してメール（共有）'));
+      bShare.addEventListener('click', () => shareChanges(items, 'share'));
+      const bDl = el('button'); bDl.appendChild(svgUse('i-download')); bDl.appendChild(document.createTextNode('Excel を保存'));
+      bDl.addEventListener('click', () => shareChanges(items, 'download'));
+      const bMail = el('button'); bMail.appendChild(svgUse('i-mail')); bMail.appendChild(document.createTextNode('メール文を作成'));
+      bMail.addEventListener('click', () => shareChanges(items, 'mail'));
+      const bClr = el('button', 'danger'); bClr.appendChild(svgUse('i-trash')); bClr.appendChild(document.createTextNode('すべて破棄'));
+      bClr.addEventListener('click', () => { if (confirm(`${items.length} 件の変更をすべて破棄しますか？`)) { state.edits = {}; if (state.fileMeta) state.editsByFile[state.fileMeta.name] = {}; state.editVer++; savePrefs(); render(); } });
+      act.appendChild(bShare); act.appendChild(bDl); act.appendChild(bMail); act.appendChild(bClr);
+      box.appendChild(act);
+      box.appendChild(el('div', 'chg-help', '元の Excel ファイルは変更されません。添付ファイルの「取込用」シートはマクロで元ファイルへ反映するための一覧です。'));
+      for (const sn of sheets) {
+        const sec = el('div', 'chg-sheet');
+        const h3 = el('h3'); h3.appendChild(document.createTextNode(sn)); h3.appendChild(el('span', null, `${items.filter((it) => it.sheet === sn).length}件`));
+        sec.appendChild(h3);
+        for (const it of items.filter((x) => x.sheet === sn)) {
+          const row = el('div', 'chg-item');
+          const tx = el('div', 'tx');
+          tx.appendChild(el('b', null, `${it.key} ${it.name}`.trim() || it.ref));
+          tx.appendChild(el('span', null, `${it.kb || '—'} · ${dateLabel(it.serial) || it.ref} · ${fmtDateTime(it.at)}`));
+          row.appendChild(tx);
+          const vals = el('div', 'vals');
+          vals.appendChild(el('s', null, fmtQty(it.orig)));
+          vals.appendChild(el('b', null, fmtQty(it.v)));
+          const d = it.v - it.orig;
+          vals.appendChild(el('i', d > 0 ? 'pos' : 'neg', (d > 0 ? '+' : '') + fmtQty(d)));
+          row.appendChild(vals);
+          const del = el('button', 'del'); del.appendChild(svgUse('i-x'));
+          del.title = 'この変更を取り消す';
+          del.addEventListener('click', () => { const meta = state.book.sheets.find((t) => t.name === it.sheet); const m = meta ? state.prepared.get(meta.index) : null; if (m) setEdit(m, it.r, it.c, null); render(); });
+          row.appendChild(del);
+          sec.appendChild(row);
+        }
+        box.appendChild(sec);
+      }
+    } else {
+      const em = el('div', 'chg-empty');
+      em.appendChild(el('b', null, 'まだ変更はありません'));
+      em.appendChild(document.createTextNode('表の「所要」「発注」の数量をタップして変更すると、ここに一覧表示されます。'));
+      box.appendChild(em);
+    }
+    scroller.appendChild(box);
+    container.appendChild(scroller);
+    setCount(container, items.length ? `${items.length}件` : '');
+  }
+  function changesMailText(items) {
+    const file = state.fileMeta ? state.fileMeta.name : '発注ブック';
+    const lines = [];
+    lines.push(`発注ブック「${file}」の数量変更をお送りします。`);
+    lines.push(`変更件数: ${items.length}件`);
+    lines.push('添付の Excel「変更一覧」をご確認ください（「取込用」シートはマクロ反映用です）。');
+    lines.push('');
+    lines.push('■ 変更内容');
+    for (const it of items) {
+      const d = it.v - it.orig;
+      lines.push(`・${it.sheet} / ${it.key} ${it.name} / ${it.kb} / ${dateLabel(it.serial) || it.ref}: ${fmtQty(it.orig)} → ${fmtQty(it.v)}（${d > 0 ? '+' : ''}${fmtQty(d)}）`);
+    }
+    lines.push('');
+    lines.push('※ 元のファイルは変更していません。Order View から送信。');
+    return lines.join('\n');
+  }
+  async function buildChangesXlsx(items) {
+    const H = (v) => ({ v, s: 1 });
+    const stamp = fmtDateTime(Date.now());
+    const file = state.fileMeta ? state.fileMeta.name : '';
+    const s1 = [
+      [{ v: `数量変更一覧（${items.length}件）`, s: 6 }],
+      [{ v: `元ファイル: ${file}   作成: ${stamp}   ※元ファイルは変更していません`, s: 3 }],
+      [],
+      ['No', 'シート', '品番', '品名', '区分', '日付', '変更前', '変更後', '差分', '変更日時', 'セル'].map(H),
+    ];
+    items.forEach((it, i) => {
+      const d = it.v - it.orig;
+      s1.push([i + 1, it.sheet, it.key, it.name, it.kb, it.serial != null ? { v: it.serial, s: 5 } : it.ref, { v: it.orig, s: 3 }, { v: it.v, s: 2 }, { v: d, s: 4 }, fmtDateTime(it.at), it.ref]);
+    });
+    const s2 = [['シート名', 'セル参照', '行', '列', '品番', '区分', '日付', '変更前', '変更後'].map(H)];
+    for (const it of items) s2.push([it.sheet, it.ref, it.r, XlsxLite.indexToCol(it.c), it.key, it.kb, dateISO(it.serial), it.orig, it.v]);
+    return XlsxWrite.build([
+      { name: '変更一覧', cols: [5, 16, 16, 28, 7, 11, 9, 9, 8, 17, 8], rows: s1, freeze: 4, filter: true, filterRange: `A4:K${s1.length}` },
+      { name: '取込用', cols: [16, 9, 6, 5, 16, 7, 12, 9, 9], rows: s2, freeze: 1, filter: true, filterRange: `A1:I${s2.length}` },
+    ]);
+  }
+  async function shareChanges(items, mode) {
+    try {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      const fname = `OrderView_変更_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.xlsx`;
+      const subject = `【Order View】発注数量の変更 ${items.length}件（${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}）`;
+      const body = changesMailText(items);
+      if (mode === 'mail') {
+        try { await navigator.clipboard.writeText(body); toast('メール文をコピーしました'); } catch (e) { /* ignore */ }
+        location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        return;
+      }
+      overlay(true, 'Excel を作成中…', 60);
+      const blob = await buildChangesXlsx(items);
+      overlay(false);
+      const file = new File([blob], fname, { type: blob.type });
+      if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: subject, text: body });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      if (mode === 'share') {
+        toast('この端末では共有できないため Excel を保存しました。メールに添付してください');
+        location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      } else toast('Excel を保存しました');
+    } catch (err) {
+      overlay(false);
+      if (err && err.name === 'AbortError') return;
+      console.error(err);
+      toast('作成に失敗しました: ' + (err && err.message ? err.message : err), true);
+    }
+  }
+
+  // ---------------------------------------------------------------- header status
+  function setHeaderStatus(m, prefix) {
+    const t2 = $('ttlFile');
+    t2.innerHTML = '';
+    const add = (text, cls, icon) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); t2.appendChild(sp); };
+    if (prefix) t2.appendChild(document.createTextNode(prefix));
+    if (state.query) add(`検索 ${state.query}`, '', 'i-search');
+    if (m && m.gridConfig) {
+      const cf = colFilters(m);
+      const n = Object.keys(cf).length;
+      if (n) add(`${n}列で絞り込み`, '', 'i-filter');
+      if (state.opts.ltFilter && m.gridConfig.ltCol) { const lt = ltHiddenRows(m); if (lt && lt.hiddenGroups) add(`L/T×2 ${lt.hiddenGroups}品番非表示`, '', 'i-filter'); }
+      const ne = Object.keys(sheetEdits(m)).length;
+      if (ne) add(`変更 ${ne}件`, 'chg', 'i-edit');
+    }
+    if (!t2.childNodes.length) t2.textContent = pane().idx === CHANGES_IDX ? `${editCount()}件の変更` : m && m.schedule ? '出荷日 × ライン' : 'フィルターなし';
+  }
+
+  // ---------------------------------------------------------------- orientation
+  function applyOrientation() {
+    const mode = state.opts.orient || 'auto';
+    const devLand = window.innerWidth > window.innerHeight;
+    let rot = 0;
+    if (mode === 'landscape' && !devLand) rot = 90;
+    if (mode === 'portrait' && devLand) rot = -90;
+    document.body.classList.toggle('rot90', rot === 90);
+    document.body.classList.toggle('rotm90', rot === -90);
+    const land = mode === 'landscape' || (mode === 'auto' && devLand);
+    const changed = document.body.classList.contains('land') !== land;
+    document.body.classList.toggle('land', land);
+    if (screen.orientation && screen.orientation.lock) {
+      try {
+        if (mode === 'auto') { if (screen.orientation.unlock) screen.orientation.unlock(); }
+        else screen.orientation.lock(mode === 'landscape' ? 'landscape' : 'portrait').catch(() => {});
+      } catch (e) { /* not supported */ }
+    }
+    return changed;
+  }
+
   const BLANK = '\u0000blank';
   function colFilters(m) { return state.colFilters[m.sheet.name] || {}; }
   function setColFilter(m, c, f) {
@@ -752,7 +1158,17 @@
     const entries = Object.entries(cf).map(([c, f]) => [+c, f]).filter(([c]) => c !== skipCol);
     const pass = (r) => {
       if (lt && lt.hidden.has(r)) return false;
-      for (const [c, f] of entries) if (!cellPasses(m, r, c, f)) return false;
+      for (const [c, f] of entries) {
+        if (f.grp) {
+          const g = groupOfRow(m, r);
+          if (!g) return false;
+          const kr = f.grp === 'order' ? g.orderRow : g.demandRow;
+          if (!kr) return false;
+          const cl = m.cell(kr, c);
+          if (isBlankCell(cl, m.text(cl))) return false;
+          if (!cellPasses(m, kr, c, f)) return false;
+        } else if (!cellPasses(m, r, c, f)) return false;
+      }
       return true;
     };
     return { pass, lt, active: !!(lt && lt.hiddenGroups) || entries.length > 0, nfilters: entries.length };
@@ -764,6 +1180,7 @@
       if (hh && hh.serial != null) { const pd = NumFmt.serialToDate(hh.serial); head = `${pd.M}/${pd.d}`; }
     }
     const parts = [];
+    if (f.grp) parts.push(f.grp === 'order' ? '発注あり' : '所要あり');
     if (f.values) parts.push(`${f.values.length}件`);
     if (f.nonEmpty) parts.push('空白・0除く');
     if (f.min != null && f.max != null) parts.push(`${f.min}〜${f.max}`);
@@ -809,8 +1226,10 @@
       nonEmpty: !!(cur && cur.nonEmpty),
       min: cur && cur.min != null ? cur.min : '',
       max: cur && cur.max != null ? cur.max : '',
+      grp: cur && cur.grp ? cur.grp : null,
       q: '',
     };
+    $('cfGrp').hidden = !(m.gridConfig && m.gridConfig.kubunCol && c >= m.gridConfig.dayCol);
     $('cfTitle').textContent = `${title} のフィルター`;
     $('cfSearch').value = '';
     $('cfRange').hidden = !isNum;
@@ -822,6 +1241,7 @@
     const x = cfCtx;
     if (!x) return;
     $('cfNonEmpty').classList.toggle('on', x.nonEmpty);
+    for (const b of document.querySelectorAll('#cfGrp .fchip')) b.classList.toggle('on', b.dataset.grp === x.grp);
     const list = $('cfList');
     list.innerHTML = '';
     const q = x.q;
@@ -844,8 +1264,8 @@
     const min = $('cfMin').value.trim() === '' ? null : parseFloat($('cfMin').value);
     const max = $('cfMax').value.trim() === '' ? null : parseFloat($('cfMax').value);
     const allSelected = x.keys.every((k) => x.sel.has(k));
-    const f = { values: allSelected ? null : x.keys.filter((k) => x.sel.has(k)), nonEmpty: x.nonEmpty, min: Number.isNaN(min) ? null : min, max: Number.isNaN(max) ? null : max };
-    const active = f.values || f.nonEmpty || f.min != null || f.max != null;
+    const f = { values: allSelected ? null : x.keys.filter((k) => x.sel.has(k)), nonEmpty: x.nonEmpty, min: Number.isNaN(min) ? null : min, max: Number.isNaN(max) ? null : max, grp: x.grp || null };
+    const active = f.values || f.nonEmpty || f.min != null || f.max != null || f.grp;
     setColFilter(x.m, x.c, active ? f : null);
     closePanel('cf', 'cfBg');
     render();
@@ -1009,6 +1429,12 @@
         // date columns of requirement sheets: keep long fractions short (e.g. 21.3333 → 21.3)
         if (cfg && c >= cfg.dayCol && info.isNumber && content && content.t === 'n' && !Number.isInteger(content.v) && text.length > 6 && /^-?\d+\.\d{3,}$/.test(text)) text = String(Math.round(content.v * 10) / 10);
         const cls = [];
+        let ev = null;
+        if (cfg && r > m.headerRow && c >= cfg.dayCol) {
+          ev = effVal(m, r, c);
+          if (ev) { text = fmtQty(ev.v); cls.push(ev.kind === 'edit' ? 'edited' : 'derived', 'num'); }
+          if (isEditable(m, r, c)) cls.push('editable');
+        }
         let dhead = null;
         if (cfg && c >= cfg.dayCol && (r === m.headerRow || r === m.headerRow - 1)) {
           const hh = cfg.heads[c - 1];
@@ -1027,6 +1453,7 @@
           else if (keyFull.has(c) && r > m.headerRow) td.appendChild(el('span', 'kt', text));
           else td.textContent = text;
         }
+        if (ev) td.appendChild(el('span', 'ov', fmtQty(ev.orig)));
         const h = cst.h;
         if (h === 'center' || h === 'centerContinuous') cls.push('ctr');
         else if (h === 'right') cls.push('rgt');
@@ -1139,6 +1566,7 @@
       if (!td || !td.dataset.r) return;
       const r = +td.dataset.r, c = +td.dataset.c;
       if (td.classList.contains('fh')) { hideCellInfo(); openColFilter(m, c); return; }
+      if (td.classList.contains('editable')) { hideCellInfo(); openEditor(m, r, c); return; }
       const key = r + ',' + c;
       const mg = m.mergeAnchor.get(key) || s.merges.find((x) => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2);
       const cell = mg ? m.cell(mg.r1, mg.c1) : m.cell(r, c);
@@ -1162,7 +1590,7 @@
       let top = 0;
       for (const tr of table.querySelectorAll('tr.frozen-r')) {
         for (const cell of tr.children) cell.style.top = top + 'px';
-        top += tr.getBoundingClientRect().height / zoom;
+        top += tr.offsetHeight; // layout height: unaffected by CSS rotation / zoom
       }
     }
     const first = table.querySelector('tr');
@@ -1174,7 +1602,7 @@
       if (!cell.classList.contains('frozen-c')) break;
       table.style.setProperty('--fl' + i, left + 'px');
       const ce = colEls[i];
-      left += ce ? parseFloat(getComputedStyle(ce).width) || 0 : cell.getBoundingClientRect().width / zoom;
+      left += ce ? parseFloat(getComputedStyle(ce).width) || 0 : cell.offsetWidth;
       i++;
     }
   }
@@ -1650,6 +2078,7 @@
   function syncSettings() {
     for (const sw of document.querySelectorAll('.switch[data-opt]')) sw.classList.toggle('on', !!state.opts[sw.dataset.opt]);
     $('fontVal').textContent = Math.round(state.opts.fontScale * 100) + '%';
+    for (const b of document.querySelectorAll('#orientSeg button')) b.classList.toggle('on', b.dataset.orient === (state.opts.orient || 'auto'));
   }
 
   const VIEW_LABELS = { daily: ['日別', 'i-cal'], cards: ['カード', 'i-cards'], grid: ['表', 'i-grid'], raw: ['Excel', 'i-sheet'] };
@@ -1725,7 +2154,7 @@
     if (ltShow) {
       $('ltSw').classList.toggle('on', !!state.opts.ltFilter);
       const info = ltHiddenRows(m);
-      $('ltDesc').textContent = `発注L/T×2（営業日）以内に所要・発注がない品番を隠す` + (info ? `（${info.hiddenGroups}/${info.groups}品番）` : '');
+      $('ltDesc').textContent = `発注L/T×2（営業日）以内に所要・発注がない品番を隠す` + (info ? `（${info.hiddenGroups}/${info.groups}品番）` : '') + (info && info.estimated ? ` · L/T未設定 ${info.estimated}件は類似品名・最長L/Tで推定` : '');
     }
     const show = !!cfg && state.view === 'grid';
     $('colsHead').hidden = !show;
@@ -1756,7 +2185,24 @@
     $('recentBtn').addEventListener('click', openRecent);
 
     // drawer
-    $('btnMenu').addEventListener('click', openDrawer);
+    $('btnMenu').addEventListener('click', () => { if (state.drawerOpen) closeDrawer(); else openDrawer(); });
+    $('drawerChanges').addEventListener('click', () => { closeDrawer(); showChanges(); });
+    $('edBg').addEventListener('click', () => closePanel('ed', 'edBg'));
+    $('edClose').addEventListener('click', () => closePanel('ed', 'edBg'));
+    $('edSave').addEventListener('click', saveEditor);
+    $('edReset').addEventListener('click', () => { if (!edCtx) return; setEdit(edCtx.m, edCtx.r, edCtx.c, null); closePanel('ed', 'edBg'); edCtx = null; render(); });
+    $('edMinus').addEventListener('click', () => { const x = parseFloat($('edVal').value) || 0; $('edVal').value = fmtQty(Math.max(0, x - 1)); updateEdNote(); });
+    $('edPlus').addEventListener('click', () => { const x = parseFloat($('edVal').value) || 0; $('edVal').value = fmtQty(x + 1); updateEdNote(); });
+    $('edVal').addEventListener('input', updateEdNote);
+    $('edVal').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveEditor(); });
+    for (const b of document.querySelectorAll('#orientSeg button')) {
+      b.addEventListener('click', () => { state.opts.orient = b.dataset.orient; savePrefs(); syncSettings(); applyOrientation(); if (state.book && $('home').hidden) render(); });
+    }
+    for (const b of document.querySelectorAll('#cfGrp .fchip')) {
+      b.addEventListener('click', () => { if (!cfCtx) return; cfCtx.grp = cfCtx.grp === b.dataset.grp ? null : b.dataset.grp; renderCfList(); });
+    }
+    let orientTimer = null;
+    window.addEventListener('resize', () => { clearTimeout(orientTimer); orientTimer = setTimeout(() => { if (applyOrientation() && state.book && $('home').hidden) render(); }, 120); });
     $('drawerBg').addEventListener('click', closeDrawer);
     $('drawerLoad').addEventListener('click', () => { closeDrawer(); showHome(); });
     $('drawerSettings').addEventListener('click', () => { closeDrawer(); syncSettings(); setTimeout(() => openPanel('panel', 'panelBg'), 120); });
@@ -1856,7 +2302,9 @@
     renderTargetChips();
     syncSettings();
     $('drawerVer').textContent = 'Ver ' + APP_VERSION;
+    $('drawerBrandVer').textContent = 'v' + APP_VERSION;
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
+    applyOrientation();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
     if ('launchQueue' in window && window.launchQueue.setConsumer) {
       window.launchQueue.setConsumer(async (params) => {
@@ -1868,6 +2316,6 @@
     if (rec && state.opts.autoOpen) openRecent();
   }
 
-  window.OrderViewer = { state, openFile, version: APP_VERSION, debug: { ltHiddenRows, addBusinessDays, todaySerial } };
+  window.OrderViewer = { state, openFile, version: APP_VERSION, debug: { ltHiddenRows, addBusinessDays, todaySerial, sheetGroups, collectChanges, buildChangesXlsx } };
   init();
 })();
