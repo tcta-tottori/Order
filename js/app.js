@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.6.1';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -428,7 +428,7 @@
     $('viewer').hidden = true;
     $('fab').hidden = true;
     $('ttlSheet').textContent = 'Order View';
-    $('ttlFile').textContent = state.fileMeta ? state.fileMeta.name : 'ファイルを選択してください';
+    $('hdrStatus').innerHTML = '';
     $('count').textContent = '';
     hideCellInfo();
     refreshRecentButton();
@@ -544,7 +544,7 @@
     }
     const m1 = state.prepared.get(state.panes[1].idx);
     $('ttlSheet').textContent = [0, 1].map((i) => (state.panes[i].idx === CHANGES_IDX ? '変更内容' : [m0, m1][i] ? [m0, m1][i].sheet.name : '—')).join(' / ');
-    setHeaderStatus(state.prepared.get(pane().idx), '分割ビュー');
+    setHeaderStatus(state.prepared.get(pane().idx));
     $('count').textContent = '';
     const split = el('div', 'split');
     split.style.setProperty('--ratio', state.splitRatio);
@@ -1086,21 +1086,19 @@
   }
 
   // ---------------------------------------------------------------- header status
-  function setHeaderStatus(m, prefix) {
-    const t2 = $('ttlFile');
-    t2.innerHTML = '';
-    const add = (text, cls, icon) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); t2.appendChild(sp); };
-    if (prefix) t2.appendChild(document.createTextNode(prefix));
-    if (state.query) add(`検索 ${state.query}`, '', 'i-search');
+  function setHeaderStatus(m) {
+    const box = $('hdrStatus');
+    box.innerHTML = '';
+    const add = (text, cls, icon, title) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); if (title) sp.title = title; box.appendChild(sp); };
+    if (state.query) add(state.query, '', 'i-search', '検索');
     if (m && m.gridConfig) {
       const cf = colFilters(m);
       const n = Object.keys(cf).length;
-      if (n) add(`${n}列で絞り込み`, '', 'i-filter');
-      if (state.opts.ltFilter && m.gridConfig.ltCol) { const lt = ltHiddenRows(m); if (lt && lt.hiddenGroups) add(`L/T×2 ${lt.hiddenGroups}品番非表示`, '', 'i-filter'); }
+      if (n) add(`${n}列`, '', 'i-filter', `${n}列で絞り込み`);
+      if (state.opts.ltFilter && m.gridConfig.ltCol) { const lt = ltHiddenRows(m); if (lt && lt.hiddenGroups) add(`L/T ${lt.hiddenGroups}`, '', 'i-filter', `発注L/T×2 で ${lt.hiddenGroups}品番を非表示`); }
       const ne = Object.keys(sheetEdits(m)).length;
-      if (ne) add(`変更 ${ne}件`, 'chg', 'i-edit');
+      if (ne) add(`${ne}`, 'chg', 'i-edit', `変更 ${ne}件`);
     }
-    if (!t2.childNodes.length) t2.textContent = pane().idx === CHANGES_IDX ? `${editCount()}件の変更` : m && m.schedule ? '出荷日 × ライン' : 'フィルターなし';
   }
 
   // ---------------------------------------------------------------- orientation

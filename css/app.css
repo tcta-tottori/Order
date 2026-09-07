@@ -79,10 +79,10 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 #btnMenu .ic-x { display: none; }
 #btnMenu.open .ic-x { display: block; }
 #btnMenu.open .ic-menu { display: none; }
-.appbar-title .t2 { display: flex; gap: 6px; align-items: center; }
-.appbar-title .t2 .fs { display: inline-flex; align-items: center; gap: 3px; background: rgba(255,255,255,.16); border-radius: 6px; padding: 1px 6px; font-size: 10.5px; white-space: nowrap; }
-.appbar-title .t2 .fs.chg { background: #ffb300; color: #1c221d; font-weight: 700; }
-.appbar-title .t2 .fs svg { width: 11px; height: 11px; }
+.appbar .hstatus { display: inline-flex; gap: 4px; align-items: center; flex: none; max-width: 55%; overflow: hidden; }
+.appbar .hstatus .fs { display: inline-flex; align-items: center; gap: 3px; background: rgba(255,255,255,.18); border-radius: 7px; padding: 3px 7px; font-size: 11px; white-space: nowrap; }
+.appbar .hstatus .fs.chg { background: #ffb300; color: #1c221d; font-weight: 700; }
+.appbar .hstatus .fs svg { width: 12px; height: 12px; }
 
 .content { flex: 1 1 auto; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .scroller {
@@ -364,7 +364,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid .frozen-c { position: sticky; z-index: 2; }
 .grid .frozen-r.frozen-c { z-index: 4; }
 .grid .frozen-r { box-shadow: inset 0 -1px 0 var(--line-2); }
-.grid .frozen-c { box-shadow: inset -2px 0 0 var(--green-mid); }
+.grid .frozen-c { box-shadow: inset -2px 0 0 var(--line-2); }
 .grid td.kubun { font-size: .85em; color: var(--ink-2); text-align: center; padding-left: 2px; padding-right: 2px; }
 .grid td.kubun .kf { display: none; }
 .grid.kfull td.kubun .kf { display: inline; }
@@ -540,7 +540,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid.sched .smore { display: block; width: 100%; margin: 3px 0 1px; padding: 5px; border-radius: 7px; font-size: .78em; font-weight: 700; color: var(--green-dark); background: var(--green-light); }
 .grid.sched .none { display: block; text-align: center; color: var(--line-2); padding: 8px 0; font-size: .9em; }
 .grid.sched tr.idle td.sc { background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(0,0,0,.025) 8px 10px); }
-.grid.sched .frozen-c { box-shadow: inset -2px 0 0 var(--green-mid); }
+.grid.sched .frozen-c { box-shadow: inset -2px 0 0 var(--line-2); }
 
 /* ---------- Excel-like column filter ---------- */
 .grid td.fh { cursor: pointer; }
@@ -628,7 +628,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 /* ---------- landscape layout ---------- */
 body.land .appbar-row { min-height: 34px; }
 body.land .appbar-title .t1 { font-size: 14.5px; }
-body.land .appbar-title .t2 { font-size: 10px; }
+body.land .appbar .hstatus .fs { font-size: 10px; padding: 2px 6px; }
 body.land .iconbtn { width: 36px; height: 36px; }
 body.land .fab { width: 42px; height: 42px; bottom: calc(var(--sab) + 10px); right: calc(var(--sar) + 10px); }
 body.land .fab svg { width: 18px; height: 18px; }
