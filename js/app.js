@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.6.1';
+  const APP_VERSION = '1.6.2';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -1088,6 +1088,7 @@
   // ---------------------------------------------------------------- header status
   function setHeaderStatus(m) {
     const box = $('hdrStatus');
+    if (!box) return;
     box.innerHTML = '';
     const add = (text, cls, icon, title) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); if (title) sp.title = title; box.appendChild(sp); };
     if (state.query) add(state.query, '', 'i-search', '検索');
@@ -2303,7 +2304,23 @@
     $('drawerBrandVer').textContent = 'v' + APP_VERSION;
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
     applyOrientation();
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    // stale HTML + new JS (or the reverse) must never run together: reload once with a cache-busting URL
+    const htmlVer = document.documentElement.getAttribute('data-ver');
+    if (htmlVer !== APP_VERSION && !sessionStorage.getItem('ov-reloaded')) {
+      sessionStorage.setItem('ov-reloaded', '1');
+      location.replace(location.pathname + '?r=' + Date.now());
+      return;
+    }
+    sessionStorage.removeItem('ov-reloaded');
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+      let hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        // a new release took control: reload so HTML/JS/CSS all come from the same version
+        if (hadController && !document.querySelector('.panel.show')) location.reload();
+        hadController = true;
+      });
+    }
     if ('launchQueue' in window && window.launchQueue.setConsumer) {
       window.launchQueue.setConsumer(async (params) => {
         if (params.files && params.files.length) openFile(await params.files[0].getFile());
