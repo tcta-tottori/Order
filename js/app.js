@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.2.0';
+  const APP_VERSION = '1.3.0';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -37,7 +37,15 @@
     daySel: {},   // sheetName -> selected date serial
     lastSheet: null,
     prepared: new Map(), // sheetIndex -> model
+    panes: [{ idx: -1, view: 'grid' }, { idx: -1, view: 'grid' }],
+    active: 0,
+    split: false,
+    splitRatio: 0.5,
+    splitNames: [null, null],
   };
+  const pane = () => state.panes[state.active];
+  Object.defineProperty(state, 'sheetIdx', { get: () => pane().idx, set: (v) => { pane().idx = v; } });
+  Object.defineProperty(state, 'view', { get: () => pane().view, set: (v) => { pane().view = v; } });
 
   function loadPrefs() {
     try {
@@ -48,12 +56,16 @@
         state.views = p.views || {};
         state.colVis = p.colVis || {};
         state.lastSheet = p.lastSheet || null;
+        state.split = !!p.split;
+        state.splitRatio = p.splitRatio || 0.5;
+        state.splitNames = p.splitNames || [null, null];
       }
     } catch (e) { /* ignore */ }
   }
   function savePrefs() {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet }));
+      const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names }));
     } catch (e) { /* ignore */ }
   }
 
@@ -343,7 +355,16 @@
       }
       const first = (state.lastSheet && book.sheets.find((t) => t.name === state.lastSheet && t.state === 'visible' && (isTarget(t.index, book.allSheetNames) || state.opts.allSheets))) || targets[0];
       showViewer();
+      state.active = 0;
+      state.panes[1].idx = -1;
       await selectSheet(first.index, true);
+      if (state.split) {
+        const other = state.splitNames[1] && book.sheets.find((t) => t.name === state.splitNames[1] && t.state === 'visible');
+        const idx1 = other ? other.index : (targets.find((t) => t.index !== first.index) || {}).index;
+        if (idx1 !== undefined) { overlay(true, 'もう一方のシートを読み込み中…', 85); await tick(); await selectSheet(idx1, true, 1); }
+        else state.split = false;
+        render();
+      }
     } catch (err) {
       console.error(err);
       toast('読み込みに失敗しました: ' + (err && err.message ? err.message : err), true);
@@ -423,6 +444,7 @@
     const list = $('drawerSheets');
     list.innerHTML = '';
     if (!state.book) { list.appendChild(el('div', 'drawer-empty', 'ファイルを読み込むとシートが表示されます')); return; }
+    if (state.split && $('home').hidden) list.appendChild(el('div', 'drawer-empty', `タップしたシートを「${state.active === 0 ? '上' : '下'}」のペインに表示します`));
     const addItem = (s, other) => {
       const b = el('button', 'drawer-item' + (other ? ' other' : '') + (s.index === state.sheetIdx && $('home').hidden ? ' on' : ''));
       const dot = el('i', 'sdot');
@@ -430,7 +452,10 @@
       if (model && model.sheet.tabColor) dot.style.background = model.sheet.tabColor;
       b.appendChild(dot);
       b.appendChild(el('span', null, s.name));
-      if (model) b.appendChild(el('small', null, model.schedule ? '日別' : `${model.sheet.maxRow}行`));
+      if (state.split) {
+        const where = state.panes.map((pn, i) => (pn.idx === s.index ? (i === 0 ? '上' : '下') : '')).filter(Boolean).join('・');
+        if (where) b.appendChild(el('small', null, where));
+      } else if (model) b.appendChild(el('small', null, model.schedule ? '日別' : `${model.sheet.maxRow}行`));
       b.addEventListener('click', async () => { closeDrawer(); showViewer(); await selectSheet(s.index); });
       list.appendChild(b);
     };
@@ -445,7 +470,8 @@
   }
 
   // ---------------------------------------------------------------- sheet selection
-  async function selectSheet(idx, initial) {
+  async function selectSheet(idx, initial, paneNo) {
+    if (paneNo === undefined) paneNo = state.active;
     let m = state.prepared.get(idx);
     if (!m) {
       overlay(true, `シート「${state.book.sheets[idx].name}」を読み込み中…`, initial ? 55 : 30);
@@ -453,13 +479,14 @@
       try { m = await getModel(idx); } finally { if (!initial) overlay(false); }
       if (!m) { toast('シートを読み込めませんでした', true); return; }
     }
-    state.sheetIdx = idx;
-    state.lastSheet = m.sheet.name;
-    savePrefs();
+    const pn = state.panes[paneNo];
+    pn.idx = idx;
+    if (paneNo === 0) state.lastSheet = m.sheet.name;
     const available = availableViews(m);
     let v = state.views[m.sheet.name];
     if (!available.includes(v)) v = defaultView(m, available);
-    state.view = v;
+    pn.view = v;
+    savePrefs();
     state.query = '';
     $('searchInput').value = '';
     $('searchBox').classList.remove('has');
@@ -469,8 +496,8 @@
 
   function availableViews(m) {
     const v = [];
-    if (m.schedule) v.push('daily');
-    if (m.headerRow > 0 && m.sheet.maxRow > m.headerRow && !m.schedule) v.push('cards');
+    if (m.schedule) { v.push('daily', 'grid', 'raw'); return v; }
+    if (m.headerRow > 0 && m.sheet.maxRow > m.headerRow) v.push('cards');
     v.push('grid');
     return v;
   }
@@ -482,17 +509,121 @@
   }
 
   function render() {
-    const m = state.prepared.get(state.sheetIdx);
-    if (!m) return;
-    $('ttlSheet').textContent = m.sheet.name;
-    $('ttlFile').textContent = state.query ? `検索: ${state.query}` : (state.fileMeta ? `${state.fileMeta.name} · ${fmtDateTime(state.fileMeta.savedAt)}` : '');
     const viewer = $('viewer');
     viewer.innerHTML = '';
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
     hideCellInfo();
-    if (state.view === 'daily') renderDaily(m, viewer);
-    else if (state.view === 'cards') renderCards(m, viewer);
-    else renderGrid(m, viewer);
+    const m0 = state.prepared.get(state.panes[0].idx);
+    if (!state.split) {
+      if (!m0) return;
+      $('ttlSheet').textContent = m0.sheet.name;
+      $('ttlFile').textContent = state.query ? `検索: ${state.query}` : (state.fileMeta ? `${state.fileMeta.name} · ${fmtDateTime(state.fileMeta.savedAt)}` : '');
+      renderPane(0, viewer, false);
+      return;
+    }
+    const m1 = state.prepared.get(state.panes[1].idx);
+    $('ttlSheet').textContent = [m0, m1].map((m) => (m ? m.sheet.name : '—')).join(' / ');
+    $('ttlFile').textContent = state.query ? `検索: ${state.query}` : '分割ビュー';
+    $('count').textContent = '';
+    const split = el('div', 'split');
+    split.style.setProperty('--ratio', state.splitRatio);
+    const top = el('div', 'pane top' + (state.active === 0 ? ' active' : ''));
+    const handle = el('div', 'split-handle');
+    const bottom = el('div', 'pane bottom' + (state.active === 1 ? ' active' : ''));
+    split.appendChild(top); split.appendChild(handle); split.appendChild(bottom);
+    viewer.appendChild(split);
+    renderPane(0, top, true);
+    renderPane(1, bottom, true);
+    for (const [i, pn] of [[0, top], [1, bottom]]) {
+      pn.addEventListener('pointerdown', () => { if (state.active !== i) { state.active = i; top.classList.toggle('active', i === 0); bottom.classList.toggle('active', i === 1); } }, { capture: true });
+    }
+    attachSplitDrag(split, handle);
+  }
+
+  function renderPane(i, container, withBar) {
+    const pn = state.panes[i];
+    const m = state.prepared.get(pn.idx);
+    if (withBar) {
+      const bar = el('div', 'pane-bar');
+      const nameBtn = el('button', 'pname');
+      nameBtn.appendChild(el('span', 'tag', i === 0 ? '上' : '下'));
+      nameBtn.appendChild(el('span', null, m ? m.sheet.name : 'シートを選択'));
+      nameBtn.appendChild(svgUse('i-chev'));
+      nameBtn.addEventListener('click', () => { state.active = i; openDrawer(); });
+      bar.appendChild(nameBtn);
+      if (m) {
+        const pv = el('div', 'pviews');
+        for (const v of availableViews(m)) {
+          const b = el('button');
+          b.title = VIEW_LABELS[v][0];
+          b.appendChild(svgUse(VIEW_LABELS[v][1]));
+          b.classList.toggle('on', v === pn.view);
+          b.addEventListener('click', () => { state.active = i; pn.view = v; state.views[m.sheet.name] = v; savePrefs(); render(); });
+          pv.appendChild(b);
+        }
+        bar.appendChild(pv);
+      }
+      const cnt = el('span', 'pcount');
+      bar.appendChild(cnt);
+      container.appendChild(bar);
+      container._countEl = cnt;
+    }
+    const body = el('div', 'pane-body');
+    body._countEl = container._countEl || null;
+    container.appendChild(body);
+    if (!m) {
+      const em = el('div', 'pane-empty');
+      em.appendChild(el('div', null, 'このペインに表示するシートを選んでください'));
+      const b = el('button', null, 'シートを選択');
+      b.addEventListener('click', () => { state.active = i; openDrawer(); });
+      em.appendChild(b);
+      body.appendChild(em);
+      return;
+    }
+    if (pn.view === 'daily') renderDaily(m, body);
+    else if (pn.view === 'cards') renderCards(m, body);
+    else if (pn.view === 'grid' && m.schedule) renderScheduleGrid(m, body);
+    else renderGrid(m, body);
+  }
+
+  function setCount(container, text) {
+    const target = container && container._countEl ? container._countEl : $('count');
+    target.textContent = text;
+  }
+
+  function attachSplitDrag(split, handle) {
+    let dragging = false;
+    const move = (y) => {
+      const r = split.getBoundingClientRect();
+      const ratio = Math.max(0.18, Math.min(0.82, (y - r.top - handle.offsetHeight / 2) / (r.height - handle.offsetHeight)));
+      state.splitRatio = Math.round(ratio * 1000) / 1000;
+      split.style.setProperty('--ratio', state.splitRatio);
+    };
+    handle.addEventListener('pointerdown', (e) => { dragging = true; handle.classList.add('drag'); handle.setPointerCapture(e.pointerId); e.preventDefault(); });
+    handle.addEventListener('pointermove', (e) => { if (dragging) move(e.clientY); });
+    const end = () => { if (!dragging) return; dragging = false; handle.classList.remove('drag'); savePrefs(); for (const t of split.querySelectorAll('table.grid')) stickyOffsets(t); };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  async function setSplit(on) {
+    if (on === state.split) return;
+    state.split = on;
+    if (on) {
+      state.active = 0;
+      if (state.panes[1].idx < 0 || state.panes[1].idx === state.panes[0].idx) {
+        const targets = targetSheets();
+        const m0 = state.prepared.get(state.panes[0].idx);
+        let cand = null;
+        if (m0 && !m0.schedule) cand = targets.find((t) => { const mm = state.prepared.get(t.index); return t.name === START_SHEET || (mm && mm.schedule); }) || null;
+        if (!cand) cand = targets.find((t) => t.index !== state.panes[0].idx) || null;
+        if (cand) await selectSheet(cand.index, false, 1);
+      }
+    } else {
+      state.active = 0;
+    }
+    savePrefs();
+    render();
   }
 
   // ---------------------------------------------------------------- search helpers
@@ -757,7 +888,7 @@
     container.appendChild(scroller);
     if (pos < bodyRows.length) io.observe(sentinel);
 
-    $('count').textContent = state.query ? `${bodyRows.length}行が該当` : `${bodyRows.length}行`;
+    setCount(container, state.query ? `${bodyRows.length}行が該当` : `${bodyRows.length}行`);
     requestAnimationFrame(() => stickyOffsets(table));
 
     if (cfg && extraD > 0) {
@@ -923,7 +1054,7 @@
       entries.push({ key, rows: [r], seq: entries.length + 1 });
     }
     const shown = state.query ? entries.filter((e) => e.rows.some((r) => rowMatches(m, r))) : entries;
-    $('count').textContent = state.query ? `${shown.length}件が該当` : `${shown.length}件`;
+    setCount(container, state.query ? `${shown.length}件が該当` : `${shown.length}件`);
     if (!shown.length) list.appendChild(el('div', 'emptystate', state.query ? '該当するデータがありません' : 'データがありません'));
 
     let pos = 0;
@@ -1064,6 +1195,102 @@
     return `${p.M}/${p.d}`;
   }
 
+  // ---------------------------------------------------------------- schedule matrix (出荷日 × ライン)
+  function renderScheduleGrid(m, container) {
+    const sc = m.schedule;
+    const s = m.sheet;
+    const blocks = sc.blocks.slice().sort((a, b) => a.serial - b.serial);
+    const today = todaySerial();
+    const data = blocks.map((b) => ({ block: b, groups: sc.groups.map((g) => collectGroup(m, sc, b, g)) }));
+    const scroller = el('div', 'scroller');
+    const wrap = el('div', 'gridwrap');
+    const table = el('table', 'grid sched');
+    const zoom = state.zooms[s.name + ':sched'] || 1;
+    table.style.setProperty('--zoom', zoom);
+    const LINE_W = 86, DAY_W = 184, MAX_ITEMS = 5;
+    const cg = el('colgroup');
+    const c0 = el('col'); c0.style.width = LINE_W + 'px'; cg.appendChild(c0);
+    for (let i = 0; i < blocks.length; i++) { const ce = el('col'); ce.style.width = DAY_W + 'px'; cg.appendChild(ce); }
+    table.appendChild(cg);
+    table.style.width = (LINE_W + DAY_W * blocks.length) + 'px';
+    const tbody = el('tbody');
+    table.appendChild(tbody);
+
+    // header row
+    const hr = el('tr', 'frozen-r');
+    const corner = el('th', 'corner frozen-r frozen-c', 'ライン');
+    corner.style.left = '0px'; corner.style.top = '0px';
+    hr.appendChild(corner);
+    let todayIdx = -1;
+    data.forEach((d, i) => {
+      const th = el('th', 'frozen-r');
+      th.style.top = '0px';
+      const p = NumFmt.serialToDate(d.block.serial);
+      const dh = el('div', 'dh' + (p.wd === 6 ? ' sat' : '') + (p.wd === 0 ? ' sun' : '') + (d.block.serial === today ? ' today' : ''));
+      dh.appendChild(el('b', null, `${p.M}/${p.d}`));
+      dh.appendChild(el('i', null, ['日', '月', '火', '水', '木', '金', '土'][p.wd] + (d.block.serial === today ? ' 今日' : '')));
+      const cnt = d.groups.reduce((a, g) => a + g.items.length, 0);
+      dh.appendChild(el('small', null, cnt ? `${cnt}件` : '—'));
+      th.appendChild(dh);
+      hr.appendChild(th);
+      if (d.block.serial === today) todayIdx = i;
+    });
+    tbody.appendChild(hr);
+
+    let shown = 0, total = 0;
+    sc.groups.forEach((g, gi) => {
+      const cells = data.map((d) => d.groups[gi]);
+      const items = cells.map((c) => (state.query ? c.items.filter((it) => it.searchText.indexOf(state.query) >= 0) : c.items));
+      const n = items.reduce((a, x) => a + x.length, 0);
+      total += cells.reduce((a, c) => a + c.items.length, 0);
+      if (state.query && !n && !matches(g.name)) return;
+      shown += n;
+      const tr = el('tr', n ? '' : 'idle');
+      const lc = el('td', 'line-cell frozen-c');
+      lc.style.left = '0px';
+      lc.appendChild(el('b', null, g.name));
+      const extras = cells[0] ? cells[0].extras : [];
+      if (extras.length) lc.appendChild(el('span', 'ex', extras.join(' / ')));
+      tr.appendChild(lc);
+      cells.forEach((c, i) => {
+        const td = el('td', 'sc' + (i === todayIdx ? ' today' : ''));
+        for (const st of c.status) td.appendChild(el('span', 'st ' + statusClass(st), st));
+        if (items[i].length) {
+          items[i].forEach((it, k) => {
+            const row = el('div', 'si' + (it.qty === null ? ' note' : ''));
+            if (it.fill && state.opts.showFills) { row.style.borderLeftColor = it.fill; row.style.background = it.fill + '40'; }
+            else row.style.borderLeftColor = 'var(--green-mid)';
+            row.appendChild(el('span', 'nm', it.name || '—'));
+            for (const t of it.tags) row.appendChild(el('span', 'tg', t));
+            if (it.qty !== null) row.appendChild(el('span', 'q', it.qty));
+            if (k >= MAX_ITEMS && !state.query) row.hidden = true;
+            td.appendChild(row);
+          });
+          if (items[i].length > MAX_ITEMS && !state.query) {
+            const mb = el('button', 'smore', `+${items[i].length - MAX_ITEMS}件を表示`);
+            mb.addEventListener('click', (ev) => { ev.stopPropagation(); for (const x of td.querySelectorAll('.si[hidden]')) x.hidden = false; mb.remove(); });
+            td.appendChild(mb);
+          }
+        } else if (!c.status.length) td.appendChild(el('span', 'none', '·'));
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+    wrap.appendChild(table);
+    scroller.appendChild(wrap);
+    container.appendChild(scroller);
+    setCount(container, state.query ? `${shown}件が該当` : `${blocks.length}日 · ${total}件`);
+    // scroll so that today's column is the first visible date column
+    if (todayIdx > 0) requestAnimationFrame(() => { scroller.scrollLeft = DAY_W * todayIdx * zoom; });
+    table.addEventListener('click', (ev) => {
+      const si = ev.target.closest('.si');
+      if (!si) return;
+      showCellInfo(si.closest('tr').querySelector('.line-cell b').textContent, si.textContent);
+    });
+    attachPinch(scroller, table, s.name + ':sched');
+  }
+
   // ---------------------------------------------------------------- daily (schedule) view
   function renderDaily(m, container) {
     const sc = m.schedule;
@@ -1126,7 +1353,7 @@
     if (!list.children.length) list.appendChild(el('div', 'emptystate', '該当するデータがありません'));
     scroller.appendChild(list);
     container.appendChild(scroller);
-    $('count').textContent = state.query ? `${shown}件が該当` : `${p.M}/${p.d} · ${total}件`;
+    setCount(container, state.query ? `${shown}件が該当` : `${p.M}/${p.d} · ${total}件`);
   }
 
   function statusClass(text) {
@@ -1205,13 +1432,31 @@
     $('fontVal').textContent = Math.round(state.opts.fontScale * 100) + '%';
   }
 
-  const VIEW_LABELS = { daily: ['日別', 'i-cal'], cards: ['カード', 'i-cards'], grid: ['表', 'i-grid'] };
+  const VIEW_LABELS = { daily: ['日別', 'i-cal'], cards: ['カード', 'i-cards'], grid: ['表', 'i-grid'], raw: ['Excel', 'i-sheet'] };
   function openViewMenu() {
-    const m = state.prepared.get(state.sheetIdx);
-    if (!m) return;
-    renderViewSeg(m);
-    renderColsList(m);
+    if (!state.book) return;
+    renderViewMenu();
     openPanel('viewMenu', 'viewMenuBg');
+  }
+  function renderViewMenu() {
+    $('splitSw').classList.toggle('on', state.split);
+    $('swapPanes').hidden = !state.split;
+    const pseg = $('paneSeg');
+    pseg.hidden = !state.split;
+    pseg.innerHTML = '';
+    if (state.split) {
+      state.panes.forEach((pn, i) => {
+        const mm = state.prepared.get(pn.idx);
+        const b = el('button', i === state.active ? 'on' : '');
+        b.textContent = `${i === 0 ? '上' : '下'}: ${mm ? mm.sheet.name : '未選択'}`;
+        b.addEventListener('click', () => { state.active = i; renderViewMenu(); render(); });
+        pseg.appendChild(b);
+      });
+    }
+    $('viewSecLabel').textContent = state.split ? `表示方法（${state.active === 0 ? '上' : '下'}のペイン）` : '表示方法';
+    const m = state.prepared.get(state.sheetIdx);
+    if (m) { renderViewSeg(m); renderColsList(m); }
+    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; }
   }
   function renderViewSeg(m) {
     const seg = $('viewSeg');
@@ -1305,6 +1550,12 @@
     $('fab').addEventListener('click', openViewMenu);
     $('viewMenuBg').addEventListener('click', () => closePanel('viewMenu', 'viewMenuBg'));
     $('viewMenuClose').addEventListener('click', () => closePanel('viewMenu', 'viewMenuBg'));
+    $('splitSw').addEventListener('click', async () => { await setSplit(!state.split); renderViewMenu(); });
+    $('swapPanes').addEventListener('click', () => {
+      state.panes.reverse();
+      state.active = 1 - state.active;
+      savePrefs(); renderViewMenu(); render();
+    });
     $('colsReset').addEventListener('click', () => {
       const m = state.prepared.get(state.sheetIdx);
       if (!m) return;

@@ -34,6 +34,8 @@
       <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></symbol>
       <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+      <symbol id="i-split" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 12h18"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
       <symbol id="i-columns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></symbol>
     </defs>
   </svg>
@@ -108,7 +110,9 @@
   <div class="panel" id="viewMenu" hidden>
     <div class="grip"></div>
     <div class="panel-title"><h2>表示メニュー</h2><button class="iconbtn" id="viewMenuClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
-    <div class="psec">表示方法</div>
+    <div class="psec-row"><div class="psec">分割ビュー<small class="psub">上下 2 画面に別のシートを表示</small></div><button class="switch" id="splitSw"></button></div>
+    <div class="seg wide" id="paneSeg" hidden></div>
+    <div class="psec-row"><div class="psec" id="viewSecLabel">表示方法</div><button class="linkbtn" id="swapPanes" hidden>上下を入れ替え</button></div>
     <div class="seg wide" id="viewSeg"></div>
     <div class="psec">検索</div>
     <label class="search" id="searchBox">

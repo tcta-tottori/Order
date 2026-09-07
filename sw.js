@@ -1,5 +1,5 @@
 /* Service worker: caches the app shell so it works offline once visited. */
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const CACHE = 'orderviewer-' + VERSION;
 const ASSETS = [
   './', './index.html', './css/app.css', './js/app.js', './js/numfmt.js', './js/xlsx-lite.js',
