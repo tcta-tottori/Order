@@ -500,9 +500,9 @@ svg { display: block; }
 .grid.sched .dh.today { background: var(--green); color: #fff; }
 .grid.sched .dh.today b, .grid.sched .dh.today i, .grid.sched .dh.today small { color: #fff; }
 .grid.sched .dh.today small { opacity: .85; }
-.grid.sched th.corner { background: var(--green-light); padding: 10px 8px; vertical-align: middle; color: var(--green-deep); font-size: .85em; }
-.grid.sched td.line-cell { background: var(--surface-2); padding: 8px 8px; }
-.grid.sched td.line-cell b { display: block; font-size: 1em; color: var(--green-deep); overflow-wrap: anywhere; line-height: 1.25; }
+.grid.sched th.corner { background: var(--green-light); padding: 10px 0; vertical-align: middle; text-align: center; color: var(--green-deep); font-size: .85em; }
+.grid.sched td.line-cell { background: var(--green-light); padding: 8px 0; text-align: center; cursor: pointer; }
+.grid.sched td.line-cell b { display: block; font-size: 1.15em; color: var(--green-deep); line-height: 1.2; }
 .grid.sched td.line-cell .ex { display: block; margin-top: 4px; font-size: .74em; color: var(--ink-2); }
 .grid.sched td.sc { padding: 4px 4px 4px; }
 .grid.sched td.sc.today { background: #f2f9ec; }

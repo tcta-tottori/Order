@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.5.1';
+  const APP_VERSION = '1.5.2';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -1422,7 +1422,7 @@
     const table = el('table', 'grid sched');
     const zoom = state.zooms[s.name + ':sched'] || 1;
     table.style.setProperty('--zoom', zoom);
-    const LINE_W = 86, DAY_W = 184, MAX_ITEMS = 5;
+    const LINE_W = 34, DAY_W = 184, MAX_ITEMS = 5;
     const cg = el('colgroup');
     const c0 = el('col'); c0.style.width = LINE_W + 'px'; cg.appendChild(c0);
     for (let i = 0; i < blocks.length; i++) { const ce = el('col'); ce.style.width = DAY_W + 'px'; cg.appendChild(ce); }
@@ -1433,7 +1433,7 @@
 
     // header row
     const hr = el('tr', 'frozen-r');
-    const corner = el('th', 'corner frozen-r frozen-c', 'ライン');
+    const corner = el('th', 'corner frozen-r frozen-c', 'L');
     corner.style.left = '0px'; corner.style.top = '0px';
     hr.appendChild(corner);
     let todayIdx = -1;
@@ -1463,9 +1463,12 @@
       const tr = el('tr', n ? '' : 'idle');
       const lc = el('td', 'line-cell frozen-c');
       lc.style.left = '0px';
-      lc.appendChild(el('b', null, g.name));
       const extras = cells[0] ? cells[0].extras : [];
-      if (extras.length) lc.appendChild(el('span', 'ex', extras.join(' / ')));
+      const short = (g.name || '').trim().charAt(0) || '·';
+      const b = el('b', null, short);
+      b.title = g.name;
+      lc.dataset.name = g.name + (extras.length ? '\n' + extras.join(' / ') : '');
+      lc.appendChild(b);
       tr.appendChild(lc);
       cells.forEach((c, i) => {
         const td = el('td', 'sc' + (i === todayIdx ? ' today' : ''));
@@ -1499,9 +1502,11 @@
     // scroll so that today's column is the first visible date column
     if (todayIdx > 0) requestAnimationFrame(() => { scroller.scrollLeft = DAY_W * todayIdx * zoom; });
     table.addEventListener('click', (ev) => {
+      const lc = ev.target.closest('.line-cell');
+      if (lc) { showCellInfo('ライン', lc.dataset.name || ''); return; }
       const si = ev.target.closest('.si');
       if (!si) return;
-      showCellInfo(si.closest('tr').querySelector('.line-cell b').textContent, si.textContent);
+      showCellInfo(si.closest('tr').querySelector('.line-cell').dataset.name.split('\n')[0], si.textContent);
     });
     attachPinch(scroller, table, s.name + ':sched');
   }
