@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.4.1';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -867,6 +867,7 @@
         keyCompact.set(c, Math.max(40, Math.ceil(full / 2)));
       }
     }
+    if (cfg && cfg.kubunCol && !m.hiddenCol(cfg.kubunCol)) { keyFull.set(cfg.kubunCol, 42); keyCompact.set(cfg.kubunCol, 26); }
     const extraD = Array.from(keyFull.keys()).reduce((a, c) => a + keyFull.get(c) - keyCompact.get(c), 0);
     const colWidthPx = (c) => {
       const w = s.cols[c] && s.cols[c].width != null ? s.cols[c].width : s.defaultColWidth;
@@ -968,7 +969,8 @@
           }
         }
         if (text) {
-          if (keyFull.has(c) && r > m.headerRow) td.appendChild(el('span', 'kt', text));
+          if (cfg && c === cfg.kubunCol) { td.appendChild(el('span', 'k1', text.charAt(0))); td.appendChild(el('span', 'kf', text)); }
+          else if (keyFull.has(c) && r > m.headerRow) td.appendChild(el('span', 'kt', text));
           else td.textContent = text;
         }
         const h = cst.h;
@@ -993,7 +995,7 @@
           if (luminance(cst.fill) < 0.45 && !cst.font.color) td.style.color = '#fff';
         }
         if (frozenColSet.has(c)) { td.classList.add('frozen-c'); td.style.left = `var(--fl${fz++})`; }
-        if (keyFull.has(c)) { td.classList.add('key'); if (text && textWidth(text, cst.font.bold, baseFontPx) + 10 > keyCompact.get(c)) td.classList.add('cut'); }
+        if (keyFull.has(c) && !(cfg && c === cfg.kubunCol)) { td.classList.add('key'); if (text && textWidth(text, cst.font.bold, baseFontPx) + 10 > keyCompact.get(c)) td.classList.add('cut'); }
         if (isFrozen) td.classList.add('frozen-r');
         // Excel-like spill of text into empty neighbours
         if (text && !mg && !cst.wrap && cst.rot !== 255 && (!h || h === 'general' || h === 'left') && !info.isNumber && !info.isDate && !(cfg && c < cfg.dayCol)) {
@@ -1062,6 +1064,7 @@
         }
         table.style.width = tw + 'px';
         table.classList.toggle('expanded', t > 0.98);
+        table.classList.toggle('kfull', t > 0.5);
         stickyOffsets(table, true);
       };
       scroller.addEventListener('scroll', () => requestAnimationFrame(apply), { passive: true });

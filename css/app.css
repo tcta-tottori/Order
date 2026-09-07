@@ -56,14 +56,14 @@ svg { display: block; }
   flex: none;
   background: var(--green);
   color: var(--green-ink);
-  padding: calc(var(--sat) + 6px) calc(var(--sar) + 8px) 6px calc(var(--sal) + 6px);
+  padding: calc(var(--sat) + 2px) calc(var(--sar) + 8px) 2px calc(var(--sal) + 4px);
   box-shadow: 0 2px 8px rgba(0, 40, 20, .25);
   z-index: 20;
 }
-.appbar-row { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+.appbar-row { display: flex; align-items: center; gap: 4px; min-height: 40px; }
 .appbar-title { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
-.appbar-title .t1 { font-weight: 700; font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.appbar-title .t2 { font-size: 11.5px; color: rgba(255,255,255,.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appbar-title .t1 { font-weight: 700; font-size: 16px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.appbar-title .t2 { font-size: 11px; line-height: 1.15; color: rgba(255,255,255,.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .appbar .count { font-size: 12px; color: rgba(255,255,255,.85); white-space: nowrap; flex: none; padding-right: 4px; }
 .iconbtn {
   flex: none; width: 42px; height: 42px; border-radius: 12px;
@@ -347,7 +347,10 @@ svg { display: block; }
 .grid .frozen-r.frozen-c { z-index: 4; }
 .grid .frozen-r { box-shadow: inset 0 -1px 0 var(--line-2); }
 .grid .frozen-c { box-shadow: inset -2px 0 0 var(--green-mid); }
-.grid td.kubun { font-size: .85em; color: var(--ink-2); text-align: center; }
+.grid td.kubun { font-size: .85em; color: var(--ink-2); text-align: center; padding-left: 2px; padding-right: 2px; }
+.grid td.kubun .kf { display: none; }
+.grid.kfull td.kubun .kf { display: inline; }
+.grid.kfull td.kubun .k1 { display: none; }
 
 /* ---------- cards view ---------- */
 .cards { padding: 10px calc(var(--sar) + 10px) 0 calc(var(--sal) + 10px); display: flex; flex-direction: column; gap: 10px; font-size: calc(14px * var(--scale)); }
@@ -457,8 +460,10 @@ svg { display: block; }
 .pane-bar {
   flex: none; display: flex; align-items: center; gap: 6px;
   padding: 4px 8px 4px 6px; background: var(--surface-2); border-bottom: 1px solid var(--line);
-  min-height: 38px;
+  min-height: 32px; padding-top: 2px; padding-bottom: 2px;
 }
+.pane-bar .pviews button { height: 26px; width: 32px; }
+.pane-bar .pname { padding: 3px 8px; font-size: 13.5px; }
 .pane.active .pane-bar { background: var(--green-light); border-bottom-color: var(--green-mid); }
 .pane-bar .pname {
   display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto;
