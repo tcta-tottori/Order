@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -22,7 +22,7 @@
   // ---------------------------------------------------------------- state
   const defaults = {
     hideEmptyRows: true, hideEmptyCols: true, showHeaders: false, showFills: true,
-    allSheets: false, autoOpen: true, fontScale: 1,
+    allSheets: false, autoOpen: true, fontScale: 1, ltFilter: true,
   };
   const state = {
     opts: Object.assign({}, defaults),
@@ -42,6 +42,7 @@
     split: false,
     splitRatio: 0.5,
     splitNames: [null, null],
+    kubunSel: {},   // sheetName -> [区分 values shown] (null = all)
   };
   const pane = () => state.panes[state.active];
   Object.defineProperty(state, 'sheetIdx', { get: () => pane().idx, set: (v) => { pane().idx = v; } });
@@ -59,13 +60,14 @@
         state.split = !!p.split;
         state.splitRatio = p.splitRatio || 0.5;
         state.splitNames = p.splitNames || [null, null];
+        state.kubunSel = p.kubunSel || {};
       }
     } catch (e) { /* ignore */ }
   }
   function savePrefs() {
     try {
       const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, kubunSel: state.kubunSel }));
     } catch (e) { /* ignore */ }
   }
 
@@ -324,7 +326,8 @@
     const kubun = attr.find((h) => h.text === '区分');
     const defaultShown = new Set(keyCols);
     if (kubun) defaultShown.add(kubun.c);
-    return { dayCol, attr, keyCols, kubunCol: kubun ? kubun.c : 0, defaultShown, heads };
+    const ltHead = heads.find((h) => /発注\s*L\s*\/?\s*T/i.test(h.text)) || heads.find((h) => /L\s*\/?\s*T/i.test(h.text));
+    return { dayCol, attr, keyCols, kubunCol: kubun ? kubun.c : 0, defaultShown, heads, ltCol: ltHead ? ltHead.c : 0 };
   }
 
   async function getModel(sheetIndex) {
@@ -664,6 +667,135 @@
     savePrefs();
   }
 
+  // ---------------------------------------------------------------- row filters (L/T window, 区分)
+  function addBusinessDays(serial, n) {
+    let d = serial;
+    let wd = (Math.floor(serial) + 6) % 7; // 0 = Sunday for Excel serials (1900-01-01 = Monday)
+    let left = Math.max(0, Math.round(n));
+    while (left > 0) {
+      d++; wd = (wd + 1) % 7;
+      if (wd !== 0 && wd !== 6) left--;
+    }
+    return d;
+  }
+  /** Rows (品番 groups) that have no 所要/発注 within 発注L/T×2 business days from today. */
+  function ltHiddenRows(m) {
+    const cfg = m.gridConfig;
+    if (!cfg || !cfg.ltCol || !cfg.keyCols.length) return null;
+    const today = todaySerial();
+    const key = today + ':' + m.sheet.maxRow;
+    if (m._ltCache && m._ltCache.key === key) return m._ltCache;
+    const hidden = new Set();
+    const keyCol = cfg.keyCols[0];
+    const dateCols = cfg.heads.filter((h) => h.serial !== null && h.serial !== undefined && h.c >= cfg.dayCol);
+    let groups = 0, hiddenGroups = 0;
+    const vis = [];
+    for (let r = m.headerRow + 1; r <= m.sheet.maxRow; r++) if (!m.hiddenRow(r) && m.rowHasValue[r]) vis.push(r);
+    let i = 0;
+    while (i < vis.length) {
+      const k = m.text(m.cell(vis[i], keyCol));
+      const rows = [];
+      while (i < vis.length && m.text(m.cell(vis[i], keyCol)) === k) rows.push(vis[i++]);
+      groups++;
+      const ltCell = m.cell(rows[0], cfg.ltCol);
+      const lt = ltCell && ltCell.t === 'n' ? ltCell.v : parseFloat(m.text(ltCell)) || 0;
+      const end = addBusinessDays(today, lt * 2);
+      let has = false;
+      for (const row of rows) {
+        if (cfg.kubunCol) { const kb = m.text(m.cell(row, cfg.kubunCol)); if (!/所要|発注/.test(kb)) continue; }
+        const dayCell = m.cell(row, cfg.dayCol);
+        if (dayCell && dayCell.t === 'n' && dayCell.v !== null && dayCell.v !== undefined && dayCell.v !== 0) { has = true; break; }
+        for (const h of dateCols) {
+          if (h.serial < today || h.serial > end) continue;
+          const cl = m.cell(row, h.c);
+          if (!cl || cl.v === null || cl.v === undefined) continue;
+          if (cl.t === 'n' ? cl.v !== 0 : !/^[-－ー—\s]*$/.test(String(cl.v))) { has = true; break; }
+        }
+        if (has) break;
+      }
+      if (!has) { hiddenGroups++; for (const row of rows) hidden.add(row); }
+    }
+    m._ltCache = { key, hidden, groups, hiddenGroups };
+    return m._ltCache;
+  }
+  function kubunValues(m) {
+    const cfg = m.gridConfig;
+    if (!cfg || !cfg.kubunCol) return [];
+    if (m._kubunVals) return m._kubunVals;
+    const vals = [];
+    for (let r = m.headerRow + 1; r <= m.sheet.maxRow && vals.length < 8; r++) {
+      const t = m.text(m.cell(r, cfg.kubunCol));
+      if (t && !vals.includes(t)) vals.push(t);
+    }
+    m._kubunVals = vals;
+    return vals;
+  }
+  /** Returns a predicate deciding whether a data row passes the active filters, plus stats. */
+  function rowFilter(m) {
+    const cfg = m.gridConfig;
+    const lt = cfg && state.opts.ltFilter ? ltHiddenRows(m) : null;
+    const sel = cfg && cfg.kubunCol ? state.kubunSel[m.sheet.name] : null;
+    const selSet = Array.isArray(sel) ? new Set(sel) : null;
+    const pass = (r) => {
+      if (lt && lt.hidden.has(r)) return false;
+      if (selSet && !selSet.has(m.text(m.cell(r, cfg.kubunCol)))) return false;
+      return true;
+    };
+    return { pass, lt, selSet, active: !!(lt && lt.hiddenGroups) || !!selSet };
+  }
+  function buildFilterBar(m, container) {
+    const cfg = m.gridConfig;
+    if (!cfg) return;
+    const bar = el('div', 'fbar');
+    if (cfg.ltCol) {
+      const b = el('button', 'fchip' + (state.opts.ltFilter ? ' on' : ''));
+      b.appendChild(svgUse('i-filter'));
+      b.appendChild(document.createTextNode('L/T×2内'));
+      b.title = '発注L/T×2（営業日）以内に所要・発注がある品番だけ表示';
+      b.addEventListener('click', () => { state.opts.ltFilter = !state.opts.ltFilter; savePrefs(); render(); });
+      bar.appendChild(b);
+    }
+    const vals = kubunValues(m);
+    if (vals.length >= 2) {
+      const sel = state.kubunSel[m.sheet.name];
+      for (const v of vals) {
+        const on = !Array.isArray(sel) || sel.includes(v);
+        const b = el('button', 'fchip kb' + (on ? ' on' : ''), v);
+        b.addEventListener('click', () => {
+          const cur = Array.isArray(state.kubunSel[m.sheet.name]) ? state.kubunSel[m.sheet.name].slice() : vals.slice();
+          const i = cur.indexOf(v);
+          if (i >= 0) { if (cur.length > 1) cur.splice(i, 1); } else cur.push(v);
+          state.kubunSel[m.sheet.name] = cur.length === vals.length ? null : cur;
+          savePrefs(); render();
+        });
+        bar.appendChild(b);
+      }
+    }
+    const fq = el('label', 'fq' + (state.query ? ' has' : ''));
+    fq.appendChild(svgUse('i-search'));
+    const inp = el('input');
+    inp.type = 'search'; inp.placeholder = '絞り込み'; inp.value = state.query; inp.autocomplete = 'off';
+    let t = null;
+    inp.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        const v = inp.value.trim().toLowerCase();
+        if (v === state.query) return;
+        state.query = v; $('searchInput').value = inp.value; $('searchBox').classList.toggle('has', !!v); $('fabDot').hidden = !v;
+        render();
+        const ni = document.querySelector('.fbar .fq input'); if (ni) { ni.focus(); ni.setSelectionRange(ni.value.length, ni.value.length); }
+      }, 350);
+    });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
+    fq.appendChild(inp);
+    const clr = el('button'); clr.appendChild(svgUse('i-x'));
+    clr.addEventListener('click', (e) => { e.preventDefault(); state.query = ''; $('searchInput').value = ''; $('searchBox').classList.remove('has'); $('fabDot').hidden = true; render(); });
+    fq.appendChild(clr);
+    bar.appendChild(fq);
+    container.appendChild(bar);
+    return bar;
+  }
+
   // ---------------------------------------------------------------- grid view
   const measureCtx = document.createElement('canvas').getContext('2d');
   function textWidth(text, bold, px) {
@@ -706,8 +838,11 @@
     const freezeY = cfg ? m.headerRow : Math.min(s.freeze.y, 6);
     let rows = visibleRows(m, state.opts.hideEmptyRows);
     const frozenRows = rows.filter((r) => r <= freezeY);
+    const rf = cfg ? rowFilter(m) : null;
+    if (rf) rows = rows.filter((r) => r <= freezeY || rf.pass(r));
     if (state.query) rows = rows.filter((r) => r <= freezeY || rowMatches(m, r));
     const bodyRows = rows.filter((r) => r > freezeY);
+    if (cfg) buildFilterBar(m, container);
     const showHead = state.opts.showHeaders;
     const baseFontPx = 13 * state.opts.fontScale;
     const today = todaySerial();
@@ -818,8 +953,24 @@
         let text = info.text;
         // date columns of requirement sheets: keep long fractions short (e.g. 21.3333 → 21.3)
         if (cfg && c >= cfg.dayCol && info.isNumber && content && content.t === 'n' && !Number.isInteger(content.v) && text.length > 6 && /^-?\d+\.\d{3,}$/.test(text)) text = String(Math.round(content.v * 10) / 10);
-        if (text) td.textContent = text;
         const cls = [];
+        let dhead = null;
+        if (cfg && c >= cfg.dayCol && (r === m.headerRow || r === m.headerRow - 1)) {
+          const hh = cfg.heads[c - 1];
+          if (hh && hh.serial !== null && hh.serial !== undefined) {
+            const pd = NumFmt.serialToDate(hh.serial);
+            if (r === m.headerRow - 1) { text = `${pd.M}/${pd.d}`; dhead = 'dh1'; }
+            else { text = ['日', '月', '火', '水', '木', '金', '土'][pd.wd]; dhead = 'dh2'; }
+            cls.push(dhead);
+            if (pd.wd === 6) cls.push('sat');
+            if (pd.wd === 0) cls.push('sun');
+            if (hh.serial === today) cls.push('today');
+          }
+        }
+        if (text) {
+          if (keyFull.has(c) && r > m.headerRow) td.appendChild(el('span', 'kt', text));
+          else td.textContent = text;
+        }
         const h = cst.h;
         if (h === 'center' || h === 'centerContinuous') cls.push('ctr');
         else if (h === 'right') cls.push('rgt');
@@ -837,7 +988,7 @@
         if (cst.font.size && cst.font.size !== 11 && !cfg) td.style.fontSize = (cst.font.size / 11) + 'em';
         if (cst.font.color && !isWhiteish(cst.font.color)) td.style.color = cst.font.color;
         else if (cst.font.color && cst.fill && luminance(cst.fill) < 0.5) td.style.color = cst.font.color;
-        if (state.opts.showFills && cst.fill && !(cfg && r === m.headerRow)) {
+        if (state.opts.showFills && cst.fill && !(cfg && r === m.headerRow) && !dhead) {
           td.style.background = cst.fill;
           if (luminance(cst.fill) < 0.45 && !cst.font.color) td.style.color = '#fff';
         }
@@ -888,7 +1039,7 @@
     container.appendChild(scroller);
     if (pos < bodyRows.length) io.observe(sentinel);
 
-    setCount(container, state.query ? `${bodyRows.length}行が該当` : `${bodyRows.length}行`);
+    setCount(container, (state.query ? `${bodyRows.length}行が該当` : `${bodyRows.length}行`) + (rf && rf.lt && rf.lt.hiddenGroups ? ` · ${rf.lt.hiddenGroups}品番を非表示` : ''));
     requestAnimationFrame(() => stickyOffsets(table));
 
     if (cfg && extraD > 0) {
@@ -1045,16 +1196,19 @@
       list.appendChild(box);
     }
 
+    const rf = m.gridConfig ? rowFilter(m) : null;
+    if (m.gridConfig) buildFilterBar(m, container);
     const entries = [];
     for (let r = hr + 1; r <= s.maxRow; r++) {
       if (m.hiddenRow(r) || !m.rowHasValue[r]) continue;
+      if (rf && !rf.pass(r)) continue;
       const key = tc.title ? m.text(m.cell(r, tc.title)) + '|' + (tc.sub ? m.text(m.cell(r, tc.sub)) : '') : null;
       const last = entries[entries.length - 1];
       if (useSeries && tc.badge && key && last && last.key === key && last.rows.length < 6) { last.rows.push(r); continue; }
       entries.push({ key, rows: [r], seq: entries.length + 1 });
     }
     const shown = state.query ? entries.filter((e) => e.rows.some((r) => rowMatches(m, r))) : entries;
-    setCount(container, state.query ? `${shown.length}件が該当` : `${shown.length}件`);
+    setCount(container, (state.query ? `${shown.length}件が該当` : `${shown.length}件`) + (rf && rf.lt && rf.lt.hiddenGroups ? ` · ${rf.lt.hiddenGroups}品番を非表示` : ''));
     if (!shown.length) list.appendChild(el('div', 'emptystate', state.query ? '該当するデータがありません' : 'データがありません'));
 
     let pos = 0;
@@ -1456,7 +1610,7 @@
     $('viewSecLabel').textContent = state.split ? `表示方法（${state.active === 0 ? '上' : '下'}のペイン）` : '表示方法';
     const m = state.prepared.get(state.sheetIdx);
     if (m) { renderViewSeg(m); renderColsList(m); }
-    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; }
+    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; $('ltHead').hidden = true; }
   }
   function renderViewSeg(m) {
     const seg = $('viewSeg');
@@ -1480,6 +1634,13 @@
   function renderColsList(m) {
     const cfg = m.gridConfig;
     const list = $('colsList');
+    const ltShow = !!(cfg && cfg.ltCol) && (state.view === 'grid' || state.view === 'cards');
+    $('ltHead').hidden = !ltShow;
+    if (ltShow) {
+      $('ltSw').classList.toggle('on', !!state.opts.ltFilter);
+      const info = ltHiddenRows(m);
+      $('ltDesc').textContent = `発注L/T×2（営業日）以内に所要・発注がない品番を隠す` + (info ? `（${info.hiddenGroups}/${info.groups}品番）` : '');
+    }
     const show = !!cfg && state.view === 'grid';
     $('colsHead').hidden = !show;
     list.hidden = !show;
@@ -1550,6 +1711,7 @@
     $('fab').addEventListener('click', openViewMenu);
     $('viewMenuBg').addEventListener('click', () => closePanel('viewMenu', 'viewMenuBg'));
     $('viewMenuClose').addEventListener('click', () => closePanel('viewMenu', 'viewMenuBg'));
+    $('ltSw').addEventListener('click', () => { state.opts.ltFilter = !state.opts.ltFilter; savePrefs(); renderViewMenu(); render(); });
     $('splitSw').addEventListener('click', async () => { await setSplit(!state.split); renderViewMenu(); });
     $('swapPanes').addEventListener('click', () => {
       state.panes.reverse();
@@ -1610,6 +1772,6 @@
     if (rec && state.opts.autoOpen) openRecent();
   }
 
-  window.OrderViewer = { state, openFile, version: APP_VERSION };
+  window.OrderViewer = { state, openFile, version: APP_VERSION, debug: { ltHiddenRows, addBusinessDays, todaySerial } };
   init();
 })();
