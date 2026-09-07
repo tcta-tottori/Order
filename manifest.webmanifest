@@ -1,6 +1,6 @@
 {
-  "name": "発注ビューア",
-  "short_name": "発注ビューア",
+  "name": "Order View",
+  "short_name": "Order View",
   "description": "Excel の発注ブック（直近〜所要）をスマートフォンで見やすく表示します",
   "start_url": "./",
   "scope": "./",

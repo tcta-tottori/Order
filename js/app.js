@@ -1,8 +1,8 @@
-/* 発注ビューア — app.js */
+/* Order View (発注ビューア) — app.js */
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.1.2';
+  const APP_VERSION = '1.2.0';
   const APP_DATE = '2026-09-07';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -395,7 +395,7 @@
     $('home').hidden = false;
     $('viewer').hidden = true;
     $('fab').hidden = true;
-    $('ttlSheet').textContent = '発注ビューア';
+    $('ttlSheet').textContent = 'Order View';
     $('ttlFile').textContent = state.fileMeta ? `読み込み中: ${state.fileMeta.name}` : 'ファイルを選択してください';
     $('count').textContent = '';
     hideCellInfo();
@@ -581,11 +581,12 @@
     const baseFontPx = 13 * state.opts.fontScale;
     const today = todaySerial();
 
-    // key columns (品番 / 品名) are sized to their longest value so 品番 is never cut off
-    const keyWidth = new Map();
+    // key columns (品番 / 品名): compact by default (about half of the text width);
+    // scrolling further left past the 当日 column expands them to their full width.
+    const keyFull = new Map(), keyCompact = new Map();
     if (cfg) {
       for (const c of cfg.keyCols) {
-        const cap = /品名/.test(m.text(m.cell(m.headerRow, c))) ? 124 : 132;
+        const cap = /品名/.test(m.text(m.cell(m.headerRow, c))) ? 170 : 150;
         let need = textWidth(m.text(m.cell(m.headerRow, c)), true, baseFontPx);
         let n = 0;
         for (let r = m.headerRow + 1; r <= s.maxRow && n < 300; r++) {
@@ -595,14 +596,17 @@
           n++;
           need = Math.max(need, textWidth(t, false, baseFontPx));
         }
-        keyWidth.set(c, Math.min(cap, Math.ceil(need) + 12));
+        const full = Math.min(cap, Math.ceil(need) + 12);
+        keyFull.set(c, full);
+        keyCompact.set(c, Math.max(40, Math.ceil(full / 2)));
       }
     }
+    const extraD = Array.from(keyFull.keys()).reduce((a, c) => a + keyFull.get(c) - keyCompact.get(c), 0);
     const colWidthPx = (c) => {
       const w = s.cols[c] && s.cols[c].width != null ? s.cols[c].width : s.defaultColWidth;
       let px = Math.round(w * 7.2 + 5);
       if (cfg) {
-        if (keyWidth.has(c)) px = keyWidth.get(c);
+        if (keyFull.has(c)) px = keyCompact.get(c);
         else if (c === cfg.kubunCol) px = Math.min(px, 40);
         else if (c >= cfg.dayCol) px = Math.min(px, 62);
       }
@@ -612,8 +616,16 @@
     const cg = el('colgroup');
     let totalW = showHead ? 34 : 0;
     if (showHead) { const c0 = el('col'); c0.style.width = '34px'; cg.appendChild(c0); }
-    for (const c of cols) { const ce = el('col'); const w = colWidthPx(c); totalW += w; ce.style.width = w + 'px'; cg.appendChild(ce); }
+    for (const c of cols) {
+      const ce = el('col');
+      const w = colWidthPx(c);
+      totalW += w;
+      if (keyFull.has(c)) { table.style.setProperty('--kw' + c, w + 'px'); ce.style.width = `var(--kw${c})`; }
+      else ce.style.width = w + 'px';
+      cg.appendChild(ce);
+    }
     table.appendChild(cg);
+    table.style.setProperty('--tw', totalW + 'px');
     table.style.width = totalW + 'px';
 
     const tbody = el('tbody');
@@ -622,8 +634,9 @@
     if (showHead) {
       const tr = el('tr');
       tr.className = 'frozen-r';
-      tr.appendChild(el('th', 'rowhead frozen-r frozen-c', ''));
-      for (const c of cols) tr.appendChild(el('th', 'frozen-r' + (frozenColSet.has(c) ? ' frozen-c' : ''), XlsxLite.indexToCol(c)));
+      let fz = 0;
+      const th0 = el('th', 'rowhead frozen-r frozen-c', ''); th0.style.left = `var(--fl${fz++})`; tr.appendChild(th0);
+      for (const c of cols) { const th = el('th', 'frozen-r' + (frozenColSet.has(c) ? ' frozen-c' : ''), XlsxLite.indexToCol(c)); if (frozenColSet.has(c)) th.style.left = `var(--fl${fz++})`; tr.appendChild(th); }
       tbody.appendChild(tr);
     }
 
@@ -637,7 +650,8 @@
       if (cfg && r === m.headerRow) tr.classList.add('hdr');
       const ht = s.rows[r] && s.rows[r].ht ? s.rows[r].ht : s.defaultRowHeight;
       const hpx = Math.max(20, Math.round(ht * 1.34));
-      if (showHead) tr.appendChild(el('th', 'rowhead frozen-c' + (isFrozen ? ' frozen-r' : ''), String(r)));
+      let fz = 0;
+      if (showHead) { const th = el('th', 'rowhead frozen-c' + (isFrozen ? ' frozen-r' : ''), String(r)); th.style.left = 'var(--fl0)'; fz = 1; tr.appendChild(th); }
       const rowCells = s.cells[r] || [];
       for (let i = 0; i < cols.length; i++) {
         const c = cols[i];
@@ -670,7 +684,9 @@
         }
         const cst = content ? m.styleOf(content) : st;
         const info = m.info(content);
-        const text = info.text;
+        let text = info.text;
+        // date columns of requirement sheets: keep long fractions short (e.g. 21.3333 → 21.3)
+        if (cfg && c >= cfg.dayCol && info.isNumber && content && content.t === 'n' && !Number.isInteger(content.v) && text.length > 6 && /^-?\d+\.\d{3,}$/.test(text)) text = String(Math.round(content.v * 10) / 10);
         if (text) td.textContent = text;
         const cls = [];
         const h = cst.h;
@@ -694,7 +710,8 @@
           td.style.background = cst.fill;
           if (luminance(cst.fill) < 0.45 && !cst.font.color) td.style.color = '#fff';
         }
-        if (frozenColSet.has(c)) td.classList.add('frozen-c');
+        if (frozenColSet.has(c)) { td.classList.add('frozen-c'); td.style.left = `var(--fl${fz++})`; }
+        if (keyFull.has(c)) { td.classList.add('key'); if (text && textWidth(text, cst.font.bold, baseFontPx) + 10 > keyCompact.get(c)) td.classList.add('cut'); }
         if (isFrozen) td.classList.add('frozen-r');
         // Excel-like spill of text into empty neighbours
         if (text && !mg && !cst.wrap && cst.rot !== 255 && (!h || h === 'general' || h === 'left') && !info.isNumber && !info.isDate && !(cfg && c < cfg.dayCol)) {
@@ -743,6 +760,37 @@
     $('count').textContent = state.query ? `${bodyRows.length}行が該当` : `${bodyRows.length}行`;
     requestAnimationFrame(() => stickyOffsets(table));
 
+    if (cfg && extraD > 0) {
+      // over-scroll zone on the left: key columns grow from compact to full width
+      const zoomOf = () => parseFloat(table.style.getPropertyValue('--zoom')) || 1;
+      let lastSl = -1;
+      const apply = () => {
+        const z = zoomOf();
+        const D = extraD * z;
+        const sl = scroller.scrollLeft;
+        if (sl === lastSl) return;
+        lastSl = sl;
+        const t = Math.max(0, Math.min(1, 1 - sl / D));
+        wrap.style.setProperty('--sp', Math.min(sl, D) + 'px');
+        let tw = totalW;
+        for (const c of keyFull.keys()) {
+          const w = Math.round(keyCompact.get(c) + (keyFull.get(c) - keyCompact.get(c)) * t);
+          tw += w - keyCompact.get(c);
+          table.style.setProperty('--kw' + c, w + 'px');
+        }
+        table.style.width = tw + 'px';
+        table.classList.toggle('expanded', t > 0.98);
+        stickyOffsets(table, true);
+      };
+      scroller.addEventListener('scroll', () => requestAnimationFrame(apply), { passive: true });
+      requestAnimationFrame(() => {
+        const D = extraD * zoomOf();
+        wrap.style.setProperty('--sp', D + 'px');
+        scroller.scrollLeft = D;
+        apply();
+      });
+    }
+
     table.addEventListener('click', (ev) => {
       const td = ev.target.closest('td');
       if (!td || !td.dataset.r) return;
@@ -764,29 +812,26 @@
     attachPinch(scroller, table, s.name);
   }
 
-  function stickyOffsets(table) {
+  function stickyOffsets(table, quick) {
     const zoom = parseFloat(table.style.getPropertyValue('--zoom')) || 1;
-    let top = 0;
-    for (const tr of table.querySelectorAll('tr.frozen-r')) {
-      for (const cell of tr.children) cell.style.top = top + 'px';
-      top += tr.getBoundingClientRect().height / zoom;
+    if (!quick) {
+      let top = 0;
+      for (const tr of table.querySelectorAll('tr.frozen-r')) {
+        for (const cell of tr.children) cell.style.top = top + 'px';
+        top += tr.getBoundingClientRect().height / zoom;
+      }
     }
     const first = table.querySelector('tr');
     if (!first) return;
-    const colLefts = [];
-    let left = 0;
+    // frozen column lefts from the colgroup (resolves CSS variables without measuring cells)
+    const colEls = Array.from(table.querySelectorAll('colgroup col'));
+    let left = 0, i = 0;
     for (const cell of first.children) {
       if (!cell.classList.contains('frozen-c')) break;
-      colLefts.push(left);
-      left += cell.getBoundingClientRect().width / zoom;
-    }
-    for (const tr of table.querySelectorAll('tr')) {
-      let i = 0;
-      for (const cell of tr.children) {
-        if (!cell.classList.contains('frozen-c')) break;
-        cell.style.left = (colLefts[i] || 0) + 'px';
-        i++;
-      }
+      table.style.setProperty('--fl' + i, left + 'px');
+      const ce = colEls[i];
+      left += ce ? parseFloat(getComputedStyle(ce).width) || 0 : cell.getBoundingClientRect().width / zoom;
+      i++;
     }
   }
 
