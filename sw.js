@@ -1,9 +1,9 @@
 /* Service worker: caches the app shell so it works offline once visited. */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.1.1';
 const CACHE = 'orderviewer-' + VERSION;
 const ASSETS = [
   './', './index.html', './css/app.css', './js/app.js', './js/numfmt.js', './js/xlsx-lite.js',
-  './vendor/jszip.min.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-180.png',
+  './vendor/jszip.min.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png', './icons/icon-180.png', './icons/icon-32.png', './favicon.ico',
 ];
 
 self.addEventListener('install', (e) => {

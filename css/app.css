@@ -224,6 +224,8 @@ svg { display: block; }
   box-shadow: 0 10px 30px rgba(33, 115, 70, .32);
 }
 .hero .logo svg { width: 46px; height: 46px; color: #fff; }
+.hero .logo-img { width: 84px; height: 84px; border-radius: 22px; margin: 0 auto 16px; display: block; box-shadow: 0 10px 30px rgba(33, 115, 70, .32); }
+.drawer-head .logo-img { width: 44px; height: 44px; border-radius: 12px; flex: none; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
 .hero h1 { margin: 0 0 6px; font-size: 22px; }
 .hero p { margin: 0; color: var(--ink-2); font-size: 14px; }
 .bigbtn {
