@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.7.1';
+  const APP_VERSION = '1.7.2';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -1117,6 +1117,76 @@
       const ne = Object.keys(sheetEdits(m)).length;
       if (ne) add(`${ne}`, 'chg', 'i-edit', `変更 ${ne}件`);
     }
+  }
+
+  // ---------------------------------------------------------------- 更新チェック
+  let latestVer = null;      // 公開されている版（index.html の data-ver）
+  let lastCheck = 0;
+  let updateDismissed = false;
+
+  /** 公開中の index.html から版を読む。キャッシュを一切通さない。 */
+  async function fetchLatestVersion() {
+    const url = location.pathname.replace(/[^/]*$/, '') + 'index.html?ts=' + Date.now();
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const m = (await res.text()).match(/<html[^>]*data-ver="([^"]+)"/);
+    if (!m) throw new Error('版を判定できません');
+    return m[1];
+  }
+
+  /** 新しい版が出ていないか調べ、あれば更新バーを出す。 */
+  async function checkForUpdate(manual) {
+    const now = Date.now();
+    if (!manual && now - lastCheck < 60000) return latestVer;
+    lastCheck = now;
+    if ('serviceWorker' in navigator) {
+      try { for (const r of await navigator.serviceWorker.getRegistrations()) r.update(); } catch (e) { /* ignore */ }
+    }
+    try {
+      latestVer = await fetchLatestVersion();
+    } catch (e) {
+      latestVer = null;
+      if (manual) toast('更新を確認できませんでした（通信を確認してください）', true);
+      renderAboutUpdate();
+      return null;
+    }
+    const stale = latestVer !== APP_VERSION;
+    if (stale && !updateDismissed) showUpdateBar(latestVer);
+    else if (!stale) { $('updbar').hidden = true; if (manual) toast('最新版です（v' + APP_VERSION + '）'); }
+    renderAboutUpdate();
+    return latestVer;
+  }
+
+  function showUpdateBar(v) {
+    $('updText').textContent = `新しいバージョン v${v} があります`;
+    $('updbar').hidden = false;
+  }
+  function renderAboutUpdate() {
+    const box = $('aboutLatest');
+    if (!box) return;
+    if (!latestVer) { box.textContent = '確認できません'; $('aboutUpdate').hidden = true; return; }
+    const stale = latestVer !== APP_VERSION;
+    box.textContent = stale ? `v${latestVer}（更新あり）` : `v${latestVer}（最新）`;
+    $('aboutUpdate').hidden = !stale;
+  }
+
+  /** キャッシュと Service Worker を作り直して読み込み直す。保存したファイル・設定は消さない。 */
+  async function applyUpdate() {
+    overlay(true, '最新版に更新しています…', 20);
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister().catch(() => null)));
+      }
+      overlay(true, '最新版に更新しています…', 60);
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k).catch(() => null)));
+      }
+    } catch (e) { /* 消せなくても読み込み直す */ }
+    overlay(true, '最新版に更新しています…', 90);
+    sessionStorage.removeItem('ov-reloaded');
+    location.replace(location.pathname + '?u=' + Date.now());
   }
 
   // ---------------------------------------------------------------- orientation
@@ -2716,8 +2786,14 @@
       $('aboutVer').textContent = APP_VERSION;
       $('aboutDate').textContent = APP_DATE;
       $('aboutFile').textContent = state.fileMeta ? `${state.fileMeta.name}（${fmtBytes(state.fileMeta.size)}）` : '—';
+      renderAboutUpdate();
+      checkForUpdate(true);
       setTimeout(() => openPanel('about', 'aboutBg'), 120);
     });
+    $('updNow').addEventListener('click', applyUpdate);
+    $('updHide').addEventListener('click', () => { updateDismissed = true; $('updbar').hidden = true; });
+    $('aboutCheck').addEventListener('click', () => { $('aboutLatest').textContent = '確認中…'; updateDismissed = false; checkForUpdate(true); });
+    $('aboutUpdate').addEventListener('click', applyUpdate);
     $('aboutBg').addEventListener('click', () => closePanel('about', 'aboutBg'));
     $('aboutClose').addEventListener('click', () => closePanel('about', 'aboutBg'));
 
@@ -2842,11 +2918,17 @@
       navigator.serviceWorker.register('sw.js').catch(() => {});
       let hadController = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        // a new release took control: reload so HTML/JS/CSS all come from the same version
-        if (hadController && !document.querySelector('.panel.show')) location.reload();
+        // 新しい版が制御を取った。HTML/JS/CSS の版が混ざらないよう読み込み直す
+        if (!hadController) { hadController = true; return; }
         hadController = true;
+        if (document.querySelector('.panel.show')) { updateDismissed = false; checkForUpdate(true); return; }
+        location.reload();
       });
     }
+    // ホーム画面の PWA は復帰時にページが再読み込みされないので、そのたびに版を確認する
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(false); });
+    window.addEventListener('focus', () => checkForUpdate(false));
+    checkForUpdate(false);
     if ('launchQueue' in window && window.launchQueue.setConsumer) {
       window.launchQueue.setConsumer(async (params) => {
         if (params.files && params.files.length) openFile(await params.files[0].getFile());
@@ -2857,6 +2939,6 @@
     if (rec && state.opts.autoOpen) openRecent();
   }
 
-  window.OrderViewer = { state, openFile, version: APP_VERSION, debug: { ltHiddenRows, addBusinessDays, todaySerial, sheetGroups, collectChanges, buildChangesXlsx } };
+  window.OrderViewer = { state, openFile, version: APP_VERSION, checkUpdate: checkForUpdate, applyUpdate, debug: { ltHiddenRows, addBusinessDays, todaySerial, sheetGroups, collectChanges, buildChangesXlsx } };
   init();
 })();

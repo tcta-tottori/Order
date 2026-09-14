@@ -772,3 +772,13 @@ body:not(.land) .drawer-foot .drawer-item { margin-left: 12px; }
 
 body.land .stocklist { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 body.land .stock-title { grid-column: 1 / -1; }
+
+/* ---------- update bar ---------- */
+.updbar { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px calc(var(--sar) + 10px) 7px calc(var(--sal) + 12px); background: var(--green-light); border-bottom: 1px solid var(--green-mid); color: var(--green-deep); font-size: 12.5px; font-weight: 600; }
+.updbar .ut { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.updbar .ub { flex: none; padding: 5px 14px; border-radius: 999px; background: var(--green); color: #fff; font-weight: 700; font-size: 12.5px; }
+.updbar .ux { flex: none; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--green-dark); }
+.updbar .ux svg { width: 16px; height: 16px; }
+.about-act { display: flex; gap: 8px; margin-top: 14px; }
+.secbtn2 { flex: 1 1 0; padding: 11px; border-radius: 11px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font-weight: 700; font-size: 13.5px; }
+.secbtn2.primary { background: var(--green); border-color: var(--green); color: #fff; }

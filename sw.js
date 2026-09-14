@@ -2,7 +2,7 @@
  * - Navigations (index.html) are network-first so a new release is picked up immediately.
  * - Versioned assets (?v=) are cache-first; the version query guarantees HTML and JS never mix.
  */
-const VERSION = '1.7.1';
+const VERSION = '1.7.2';
 const CACHE = 'orderviewer-' + VERSION;
 const V = '?v=' + VERSION;
 const ASSETS = [
@@ -22,6 +22,8 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return;
+  // 更新チェック用のリクエストは素通しする（キャッシュに残さない）
+  if (url.searchParams.has('ts')) return;
   if (e.request.mode === 'navigate') {
     e.respondWith(
       fetch(new Request(e.request, { cache: 'no-cache' })).then((res) => {
