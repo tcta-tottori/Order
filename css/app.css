@@ -548,8 +548,15 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid td.fh.filt { background: var(--green-mid) !important; color: var(--green-deep); }
 .grid td.fh .fi { position: absolute; right: 2px; bottom: 2px; width: 12px; height: 12px; color: var(--green-deep); opacity: .9; }
 .grid td.fh .fi svg { width: 12px; height: 12px; }
-.panel.full { top: 0; max-height: none; border-radius: 0; overflow: hidden; display: flex; flex-direction: column;
-  padding: calc(var(--sat) + 6px) calc(var(--sar) + 14px) calc(var(--sab) + 12px) calc(var(--sal) + 14px); }
+.panel.full {
+  /* ふだんは画面の下寄り。キーボードが出たら上部を少しだけ残して広がる */
+  top: auto;
+  height: min(80%, calc(100% - var(--kb, 0px) - var(--sat) - 44px));
+  max-height: none;
+  overflow: hidden; display: flex; flex-direction: column;
+  transition: transform .22s cubic-bezier(.2,.8,.2,1), bottom .2s cubic-bezier(.2,.8,.2,1), height .2s cubic-bezier(.2,.8,.2,1);
+  padding: 10px calc(var(--sar) + 14px) calc(var(--sab) + 12px) calc(var(--sal) + 14px);
+}
 .panel.full .grip { display: none; }
 .panel.full .panel-title { flex: none; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
 .panel.full .panel-title h2 { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
