@@ -719,6 +719,7 @@ body:not(.land) .drawer-foot .drawer-item { margin-left: 12px; }
 .stock-title { font-size: .92em; font-weight: 700; color: var(--ink-2); }
 .scard { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--line); box-shadow: var(--shadow); overflow: hidden; }
 .scard.done { opacity: .58; }
+.scard.done.diff { opacity: 1; }   /* 差異ありは埋もれさせない */
 .scard.done .scard-head { background: var(--surface-2); }
 .scard-head { display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px 8px 8px; border-bottom: 1px solid var(--line); background: var(--green-light); }
 .schk { flex: none; width: 30px; height: 30px; border-radius: 9px; border: 2px solid var(--line-2); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; color: transparent; }
@@ -792,3 +793,57 @@ body.land .stock-title { grid-column: 1 / -1; }
 .about-act { display: flex; gap: 8px; margin-top: 14px; }
 .secbtn2 { flex: 1 1 0; padding: 11px; border-radius: 11px; border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-2); font-weight: 700; font-size: 13.5px; }
 .secbtn2.primary { background: var(--green); border-color: var(--green); color: #fff; }
+
+/* ---------- stocktake (実棚入力) ---------- */
+.scount { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-2); text-align: left; }
+.scount > i { flex: none; font-style: normal; font-size: .74em; color: var(--ink-3); }
+.scount .val { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 4px; }
+.scount .val b { font-size: 1.24em; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--green-deep); }
+.scount .val .u { font-size: .78em; color: var(--ink-3); }
+.scount .val em { font-style: normal; font-size: .78em; color: var(--ink-2); }
+.scount .none { flex: 1 1 auto; font-size: .88em; color: var(--ink-3); }
+.scount .dv { flex: none; padding: 2px 8px; border-radius: 999px; font-size: .78em; font-weight: 700; font-variant-numeric: tabular-nums; background: #fff; border: 1px solid var(--line-2); color: var(--ink-2); }
+.scount .dv.plus { background: #fff3e0; border-color: #ffd29a; color: var(--warn); }
+.scount .dv.minus { background: #fdecea; border-color: #f5b5b0; color: var(--danger); }
+.scount .dv.zero { background: #e8f5ec; border-color: #b7e0c3; color: var(--ok); }
+.scount .go { flex: none; padding: 4px 11px; border-radius: 999px; font-size: .78em; font-weight: 700; background: var(--green); color: #fff; }
+.scard.counted .scard-head { background: #eef6f0; }
+.scard.diff { border-color: #ffd29a; }
+
+.panel.cnt .cnt-info { padding: 2px 0 8px; }
+.panel.cnt .cnt-info b { display: block; font-size: 15px; color: var(--green-deep); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.panel.cnt .cnt-info span { display: block; font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.cnt-book { display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-3); }
+.cnt-book b { font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.cnt-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.cnt-row { display: flex; align-items: center; gap: 7px; }
+.cnt-row .cl { flex: none; width: 42px; font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
+.cnt-row input { flex: 1 1 0; min-width: 0; height: 52px; border: 1px solid var(--line-2); border-radius: 11px; text-align: center; font-size: 22px; font-weight: 700; background: var(--surface); font-variant-numeric: tabular-nums; }
+.cnt-row .ed-step { flex: none; width: 52px; height: 52px; border-radius: 11px; border: 1px solid var(--line-2); background: var(--surface-2); font-size: 22px; font-weight: 700; color: var(--green-dark); }
+.cnt-row .cu { flex: none; width: 52px; font-size: 12px; color: var(--ink-3); }
+.cnt-total { display: flex; align-items: baseline; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); }
+.cnt-total b { font-size: 26px; font-weight: 800; color: var(--green-deep); font-variant-numeric: tabular-nums; }
+.cnt-total .u { font-size: 13px; }
+.cnt-total em { margin-left: auto; font-style: normal; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cnt-total em.plus { color: var(--warn); }
+.cnt-total em.minus { color: var(--danger); }
+.cnt-total em.zero { color: var(--ok); }
+.cnt-unit { margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+.cnt-unit input { width: 66px; height: 34px; border: 1px solid var(--line); border-radius: 9px; text-align: center; background: var(--surface-2); font-size: 14px; font-weight: 700; margin: 0 4px; }
+.panel.cnt .cf-tools { margin-top: 12px; }
+
+.cf-foot.col { flex-direction: column; gap: 8px; }
+.cf-foot.col .cf-apply, .cf-foot.col .cf-clear { flex: none; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.cf-foot .cf-apply svg, .cf-foot .cf-clear svg { width: 18px; height: 18px; }
+.rpt-sum { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.rpt-sum .r { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.rpt-sum .r:last-child { border-bottom: 0; }
+.rpt-sum .r span { flex: 1 1 auto; color: var(--ink-2); }
+.rpt-sum .r b { flex: none; font-size: 15px; font-variant-numeric: tabular-nums; }
+.rpt-sum .r.head { background: var(--green-light); color: var(--green-deep); font-weight: 700; }
+.rpt-sum .r.warn b { color: var(--warn); }
+.scard-head .ttl span .cd { font-style: normal; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.smhead { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px 0; }
+.smhead b { font-size: 1.06em; font-weight: 800; color: var(--green-deep); }
+.smhead span { font-size: .78em; color: var(--ink-3); }
+body.land .smhead { grid-column: 1 / -1; }

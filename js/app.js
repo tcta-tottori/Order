@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.7.4';
+  const APP_VERSION = '1.8.0';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -44,7 +44,8 @@
     splitNames: [null, null],
     colFilters: {}, // sheetName -> { col: { values: [..]|null, nonEmpty: bool, min: n|null, max: n|null, grp: 'order'|'demand'|null } }
     stockUi: {},    // sheetName -> { sort, f: { kubun: [..] }, unchecked, still, panel } (在庫ビュー)
-    checks: {},     // fileName -> { sheetName -> { 品番: 確認した時刻 } }
+    checks: {},     // fileName -> { sheetName -> { 品番: 確認した時刻 } }（v1.7 まで）
+    counts: {},     // fileName -> { sheetName -> { 品番: { n 実棚, b 綴り, p 端数, u 1綴りの個数, at } } }
     editsByFile: {}, // fileName -> { sheetName -> { "r,c": { v, orig, at } } }
     edits: {},       // edits of the open file (alias into editsByFile)
     editVer: 0,
@@ -69,6 +70,7 @@
         state.colFilters = p.colFilters || {};
         state.stockUi = p.stockUi || {};
         state.checks = p.checks || {};
+        state.counts = p.counts || {};
         state.editsByFile = p.editsByFile || {};
       }
     } catch (e) { /* ignore */ }
@@ -76,7 +78,7 @@
   function savePrefs() {
     try {
       const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, stockUi: state.stockUi, checks: state.checks, editsByFile: state.editsByFile }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, stockUi: state.stockUi, checks: state.checks, counts: state.counts, editsByFile: state.editsByFile }));
     } catch (e) { /* ignore */ }
   }
 
@@ -1103,11 +1105,13 @@
     const add = (text, cls, icon, title) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); if (title) sp.title = title; box.appendChild(sp); };
     if (state.query) add(state.query, '', 'i-search', '検索');
     if (m && m.stock) {
-      const cm = stockChecks(m);
-      const n = stockRowSet(m).reduce((a, r) => a + (cm[checkKey(stockRec(m, r))] ? 1 : 0), 0);
+      const rows = stockRowSet(m).map((r) => stockRec(m, r));
+      const n = rows.reduce((a, r) => a + (countOf(m, r) ? 1 : 0), 0);
+      const nd = rows.reduce((a, r) => { const d = countDiff(m, r); return a + (d !== null && d !== 0 ? 1 : 0); }, 0);
       const nf = stockFilterCount(m);
       if (nf) add(String(nf), '', 'i-filter', `${nf}項目で絞り込み`);
-      if (n) add(`${n}`, 'chg', 'i-check', `確認済み ${n}件`);
+      if (n) add(`${n}`, 'chg', 'i-check', `実棚入力 ${n}件`);
+      if (nd) add(`±${nd}`, 'chg', 'i-edit', `帳簿と差異 ${nd}件`);
     }
     if (m && m.gridConfig) {
       const cf = colFilters(m);
@@ -1212,8 +1216,8 @@
 
   // ---------------------------------------------------------------- 在庫シート（在庫チェック）
   const YM_RE = /^(20\d{2})(0[1-9]|1[0-2])$/;
-  const STOCK_SORTS = [['sheet', 'Excel順'], ['amount', '金額順'], ['qty', '在庫数順'], ['still', '動きなし順'], ['code', '品番順']];
-  const STOCK_GROUPS = [['kubun', '区分'], ['staff', '担当'], ['supplier', '手配先'], ['dept', '管理部署'], ['note', '備考'], ['item', '項目']];
+  const STOCK_SORTS = [['model', '機種順'], ['sheet', 'Excel順'], ['amount', '金額順'], ['qty', '在庫数順'], ['diff', '差異順'], ['still', '動きなし順'], ['code', '品番順']];
+  const STOCK_GROUPS = [['model', '機種'], ['kubun', '区分'], ['staff', '担当'], ['supplier', '手配先'], ['dept', '管理部署'], ['note', '備考'], ['item', '項目']];
   const STOCK_STILL = 6; // 「動きなし」とみなす月数
 
   /** 品番列と 6 つ以上の YYYYMM 列を持つ在庫一覧シートを判定する。 */
@@ -1358,13 +1362,16 @@
       const sel = ui.f[key];
       if (sel && sel.length) list = list.filter((rec) => sel.indexOf(rec[key] || '') >= 0);
     }
-    if (ui.unchecked) list = list.filter((rec) => !cm[checkKey(rec)]);
+    if (ui.unchecked) list = list.filter((rec) => !countOf(m, rec));
+    if (ui.diffOnly) list = list.filter((rec) => { const d = countDiff(m, rec); return d !== null && d !== 0; });
     if (ui.still) list = list.filter((rec) => rec.still >= STOCK_STILL);
     const n = (v) => (v === null || v === undefined ? -Infinity : v);
     if (ui.sort === 'amount') list.sort((a, b) => n(b.amount) - n(a.amount));
     else if (ui.sort === 'qty') list.sort((a, b) => n(b.qty) - n(a.qty));
     else if (ui.sort === 'still') list.sort((a, b) => b.still - a.still || n(b.amount) - n(a.amount));
+    else if (ui.sort === 'diff') list.sort((a, c) => Math.abs(countDiff(m, c) || 0) - Math.abs(countDiff(m, a) || 0));
     else if (ui.sort === 'code') list.sort((a, b) => String(a.code).localeCompare(String(b.code), 'ja'));
+    else if (ui.sort === 'model') list.sort((a, b) => String(a.model || '\uffff').localeCompare(String(b.model || '\uffff'), 'ja') || String(a.code).localeCompare(String(b.code), 'ja'));
     return list;
   }
   function stockFilterCount(m) {
@@ -1372,6 +1379,7 @@
     let n = 0;
     for (const [key] of STOCK_GROUPS) if (ui.f[key] && ui.f[key].length) n++;
     if (ui.unchecked) n++;
+    if (ui.diffOnly) n++;
     if (ui.still) n++;
     return n;
   }
@@ -1426,7 +1434,8 @@
   }
 
   function renderStock(m, container) {
-    const st = m.stock, ui = stockUi(m), cm = stockChecks(m);
+    const st = m.stock, ui = stockUi(m);
+    migrateChecks(m);
     const list = stockFiltered(m);
     const nf = stockFilterCount(m);
 
@@ -1437,8 +1446,8 @@
     const nRows = stockRowSet(m).length;
     stats.appendChild(tile('品番', list.length + (list.length !== nRows ? ' / ' + nRows : '')));
     stats.appendChild(tile('在庫金額', fmtYen(list.reduce((a, x) => a + (x.amount || 0), 0))));
-    const done = list.filter((x) => cm[checkKey(x)]).length;
-    const prog = tile('確認済み', done + ' / ' + list.length, 'prog');
+    const done = list.filter((x) => countOf(m, x)).length;
+    const prog = tile('実棚入力', done + ' / ' + list.length, 'prog');
     const pbar = el('span', 'pbar'), pfill = el('i');
     pfill.style.width = (list.length ? (done / list.length) * 100 : 0) + '%';
     pbar.appendChild(pfill);
@@ -1465,7 +1474,13 @@
       b.addEventListener('click', () => { ui[key] = !ui[key]; savePrefs(); render(); });
       return b;
     };
-    tools.appendChild(quick('未確認のみ', 'unchecked'));
+    const rptBtn = el('button', 'schip rpt');
+    rptBtn.appendChild(svgUse('i-download'));
+    rptBtn.appendChild(document.createTextNode('報告資料'));
+    rptBtn.addEventListener('click', () => openReport(m));
+    tools.appendChild(rptBtn);
+    tools.appendChild(quick('未入力のみ', 'unchecked'));
+    tools.appendChild(quick('差異あり', 'diffOnly'));
     tools.appendChild(quick('動きなし', 'still', `${STOCK_STILL}か月`));
     if (st.hiddenCount) tools.appendChild(quick('Excel非表示', 'showHidden', ui.showHidden ? '表示中' : '+' + st.hiddenCount));
     bar.appendChild(tools);
@@ -1513,10 +1528,14 @@
       const clr = el('button', 'linkbtn', '絞り込みを解除');
       clr.addEventListener('click', () => { ui.f = {}; ui.unchecked = false; ui.still = false; savePrefs(); render(); });
       foot.appendChild(clr);
-      const unc = el('button', 'linkbtn', '確認済みをすべて解除');
+      const unc = el('button', 'linkbtn', '実棚の入力をすべて消す');
       unc.addEventListener('click', () => {
-        if (!Object.keys(cm).length) { toast('確認済みの品番はありません'); return; }
-        for (const k of Object.keys(cm)) delete cm[k];
+        const ct = stockCounts(m), cm2 = stockChecks(m);
+        const n = Object.keys(ct).length;
+        if (!n) { toast('入力済みの品番はありません'); return; }
+        if (!confirm(`実棚の入力 ${n} 件をすべて消します。よろしいですか？`)) return;
+        for (const k of Object.keys(ct)) delete ct[k];
+        for (const k of Object.keys(cm2)) delete cm2[k];
         savePrefs(); render();
       });
       foot.appendChild(unc);
@@ -1527,10 +1546,12 @@
 
     // 確認済みチェックの増減を、再描画せずに集計へ反映する
     const sync = () => {
-      const cur = list.filter((x) => cm[checkKey(x)]).length;
+      const cur = list.filter((x) => countOf(m, x)).length;
+      const dif = list.filter((x) => { const d = countDiff(m, x); return d !== null && d !== 0; }).length;
       prog.querySelector('b').textContent = cur + ' / ' + list.length;
       pfill.style.width = (list.length ? (cur / list.length) * 100 : 0) + '%';
-      setCount(container, (state.query || nf ? `${list.length}件が該当` : `${list.length}件`) + (cur ? ` · 確認 ${cur}` : ''));
+      setCount(container, (state.query || nf ? `${list.length}件が該当` : `${list.length}件`)
+        + (cur ? ` · 入力 ${cur}` : '') + (dif ? ` · 差異 ${dif}` : ''));
     };
     sync();
 
@@ -1544,10 +1565,25 @@
     const sentinel = el('div');
     sentinel.style.height = '1px';
     const io = new IntersectionObserver((en) => { if (en.some((e) => e.isIntersecting)) more(); }, { root: scroller, rootMargin: '800px' });
+    let lastModel = null;
     function more() {
       const end = Math.min(list.length, pos + CHUNK);
       const frag = document.createDocumentFragment();
-      for (; pos < end; pos++) frag.appendChild(buildStockCard(m, list[pos], sync));
+      for (; pos < end; pos++) {
+        const rec = list[pos];
+        if (ui.sort === 'model') {
+          const mo = rec.model || '（機種なし）';
+          if (mo !== lastModel) {
+            lastModel = mo;
+            const n = list.filter((x) => (x.model || '（機種なし）') === mo).length;
+            const h = el('div', 'smhead');
+            h.appendChild(el('b', null, mo));
+            h.appendChild(el('span', null, `${n}品番`));
+            frag.appendChild(h);
+          }
+        }
+        frag.appendChild(buildStockCard(m, rec, sync));
+      }
       wrap.appendChild(frag);
       if (pos >= list.length) { io.disconnect(); sentinel.remove(); }
     }
@@ -1559,26 +1595,30 @@
   }
 
   function buildStockCard(m, rec, sync) {
-    const st = m.stock, cm = stockChecks(m);
-    const card = el('div', 'scard' + (cm[checkKey(rec)] ? ' done' : ''));
+    const st = m.stock;
+    const card = el('div', 'scard');
 
     const head = el('div', 'scard-head');
     const chk = el('button', 'schk');
-    chk.setAttribute('aria-label', '確認済みにする');
+    chk.setAttribute('aria-label', '帳簿どおりとして確認する');
+    chk.title = '帳簿どおり（差異なし）として記録';
     chk.appendChild(svgUse('i-check'));
     chk.addEventListener('click', (e) => {
       e.stopPropagation();
-      const k = checkKey(rec);
-      if (cm[k]) delete cm[k]; else cm[k] = Date.now();
-      card.classList.toggle('done', !!cm[k]);
-      savePrefs();
-      sync();
+      // ワンタップで「帳簿どおり数えた」。もう一度押すと取り消し
+      if (countOf(m, rec)) putCount(m, rec, null);
+      else if (rec.qty !== null) putCount(m, rec, { n: rec.qty, b: null, p: null, u: 0, at: Date.now() });
+      else { openCount(m, rec, refresh); return; }
+      refresh();
     });
     head.appendChild(chk);
     const ttl = el('div', 'ttl');
-    ttl.appendChild(el('b', null, rec.code || `${rec.r} 行目`));
-    const sub = [rec.name, rec.model].filter(Boolean).join(' · ');
-    if (sub) ttl.appendChild(el('span', null, sub));
+    // 機種名をいちばん大きく、その下に品番・品名
+    ttl.appendChild(el('b', null, rec.model || rec.code || `${rec.r} 行目`));
+    const sub = el('span');
+    if (rec.model && rec.code) sub.appendChild(el('i', 'cd', rec.code));
+    if (rec.name) sub.appendChild(document.createTextNode(rec.name));
+    if (sub.childNodes.length) ttl.appendChild(sub);
     head.appendChild(ttl);
     if (rec.kubun) { const bg = el('span', 'kbadge'); bg.dataset.k = rec.kubun; bg.textContent = rec.kubun; head.appendChild(bg); }
     card.appendChild(head);
@@ -1586,7 +1626,7 @@
     const nums = el('div', 'snums');
     const numBox = (k, v, cls) => { const d = el('div', 'snum' + (cls ? ' ' + cls : '')); d.appendChild(el('i', null, k)); d.appendChild(el('b', null, v)); return d; };
     const lastYm = st.months.length ? fmtYm(st.months[st.months.length - 1].ym) : '';
-    const qtyBox = numBox(lastYm ? `在庫数（${lastYm}）` : '在庫数', sNum(rec.qty), 'big');
+    const qtyBox = numBox(lastYm ? `帳簿在庫（${lastYm}）` : '帳簿在庫', sNum(rec.qty), 'big');
     if (rec.delta) {
       const d = el('span', 'delta' + (rec.delta > 0 ? ' up' : ' down'));
       d.textContent = (rec.delta > 0 ? '+' : '') + sNum(rec.delta);
@@ -1596,6 +1636,11 @@
     nums.appendChild(numBox('在庫金額', fmtYen(rec.amount), 'big'));
     if (rec.price !== null) nums.appendChild(numBox('単価', fmtYen(rec.price)));
     card.appendChild(nums);
+
+    // 実棚（棚卸）入力の行
+    const cnt = el('button', 'scount');
+    cnt.addEventListener('click', () => openCount(m, rec, refresh));
+    card.appendChild(cnt);
 
     if (rec.vals.length) {
       const sp = el('div', 'sspark');
@@ -1626,6 +1671,34 @@
       card.appendChild(rel);
     }
 
+    function refresh() {
+      const c = countOf(m, rec);
+      const d = countDiff(m, rec);
+      card.classList.toggle('counted', !!c);
+      card.classList.toggle('done', !!c);
+      card.classList.toggle('diff', d !== null && d !== 0);
+      cnt.innerHTML = '';
+      cnt.appendChild(el('i', null, '実棚'));
+      if (!c) {
+        cnt.appendChild(el('span', 'none', '未入力'));
+        cnt.appendChild(el('span', 'go', '数を入力'));
+      } else {
+        const v = el('div', 'val');
+        v.appendChild(el('b', null, sNum(c.n)));
+        v.appendChild(el('span', 'u', '個'));
+        const lab = countLabel(c);
+        if (lab) v.appendChild(el('em', null, `（${lab}）`));
+        cnt.appendChild(v);
+        if (d !== null) {
+          const dv = el('span', 'dv ' + (d > 0 ? 'plus' : d < 0 ? 'minus' : 'zero'));
+          dv.textContent = d === 0 ? '一致' : (d > 0 ? '+' : '') + sNum(d);
+          cnt.appendChild(dv);
+        }
+      }
+      if (sync) sync();
+    }
+    refresh();
+
     const more = el('button', 'smore', '明細を表示');
     const detail = el('div', 'sdetail');
     detail.hidden = true;
@@ -1644,11 +1717,14 @@
     const st = m.stock;
     const kv = el('div', 'sfields');
     const field = (k, v) => { if (v === '' || v === null || v === undefined) return; const f = el('div', 'sfield'); f.appendChild(el('div', 'k', k)); f.appendChild(el('div', 'v', v)); kv.appendChild(f); };
+    if (rec.code) field('品番', rec.code);
     if (rec.name) field('品名', rec.name);
     if (rec.model) field('代表機種', rec.model);
     if (rec.customer) field('客先', rec.customer);
     if (rec.avg !== null && rec.avg !== rec.qty) field('平均確認', sNum(rec.avg));
     if (rec.total !== null) field('推移の合計', sNum(rec.total));
+    { const bd = bundleOf(rec); if (bd.unit > 0) field(`1${bd.word}の個数`, sNum(bd.unit) + ' 個'); }
+    { const c = countOf(m, rec); if (c) field('実棚を入力した日時', fmtDateTime(c.at)); }
     for (const h of st.extra) { const v = m.text(m.cell(rec.r, h.c)); if (v) field(h.text, v); }
     field('Excel の行', String(rec.r) + ' 行目');
     if (kv.childNodes.length) box.appendChild(kv);
@@ -1664,6 +1740,273 @@
     }
     tbl.appendChild(grid);
     box.appendChild(tbl);
+  }
+
+
+  // ---------------------------------------------------------------- 実棚（棚卸）入力
+  // 箱（パッキンケース等）は 1 綴り = 10 個 が既定。ほかは入数をまとめ単位に使う。
+  const BOX_RE = /PACKING[\s-]*CASE|CARTON|カートン|ｶｰﾄﾝ|ダンボール|ﾀﾞﾝﾎﾞｰﾙ|段ボール|外箱|化粧箱|\bBOX\b|ケース|ｹｰｽ/i;
+  const BOX_UNIT = 10;
+
+  function isBoxItem(rec) { return BOX_RE.test(rec.name || '') || BOX_RE.test(rec.model || ''); }
+  /** まとめ単位（0 なら個数のみ）と、その呼び名。 */
+  function bundleOf(rec) {
+    if (isBoxItem(rec)) return { unit: BOX_UNIT, word: '綴り' };
+    const cs = parseFloat(rec.caseQty);
+    if (Number.isFinite(cs) && cs > 1) return { unit: Math.round(cs), word: 'ケース' };
+    return { unit: 0, word: 'まとめ' };
+  }
+
+  function stockCounts(m) {
+    const f = state.fileMeta ? state.fileMeta.name : '-';
+    const byFile = state.counts[f] || (state.counts[f] = {});
+    return byFile[m.sheet.name] || (byFile[m.sheet.name] = {});
+  }
+  /** v1.7 までの「確認済み」を「帳簿どおり数えた」として引き継ぐ。 */
+  function migrateChecks(m) {
+    const cm = stockChecks(m), ct = stockCounts(m);
+    let n = 0;
+    for (const k of Object.keys(cm)) {
+      if (ct[k]) continue;
+      const r = m.stock.allRows.map((x) => stockRec(m, x)).find((x) => checkKey(x) === k);
+      if (!r || r.qty === null) continue;
+      ct[k] = { n: r.qty, b: null, p: null, u: 0, at: cm[k] };
+      n++;
+    }
+    if (n) savePrefs();
+  }
+  const countOf = (m, rec) => stockCounts(m)[checkKey(rec)] || null;
+  function putCount(m, rec, val) {
+    const ct = stockCounts(m), k = checkKey(rec);
+    if (val === null) delete ct[k]; else ct[k] = val;
+    savePrefs();
+  }
+  const countDiff = (m, rec) => { const c = countOf(m, rec); return c && rec.qty !== null ? c.n - rec.qty : null; };
+
+  /** 表示用に「53 個（5綴り+3）」の形をつくる。 */
+  function countLabel(c) {
+    if (!c) return '';
+    if (c.u > 0 && (c.b || c.p)) return `${c.b || 0}${c.uw || '綴り'}` + (c.p ? ` + ${c.p}` : '');
+    return '';
+  }
+
+  // ---------------------------------------------------------------- 入力パネル
+  let cntCtx = null;
+  function openCount(m, rec, onSaved) {
+    const c = countOf(m, rec);
+    const bd = bundleOf(rec);
+    const unit = c && c.u ? c.u : bd.unit;
+    cntCtx = { m, rec, onSaved, word: bd.word, unit, b: c && c.b != null ? c.b : 0, p: 0, prev: c ? c.n : null };
+    if (c) {
+      if (c.u > 0 && c.b != null) { cntCtx.b = c.b; cntCtx.p = c.p || 0; }
+      else { cntCtx.b = unit > 0 ? Math.floor(c.n / unit) : 0; cntCtx.p = unit > 0 ? c.n - cntCtx.b * unit : c.n; }
+    }
+    $('cntName').textContent = rec.model || rec.code || `${rec.r} 行目`;
+    $('cntSub').textContent = [rec.code, rec.name].filter(Boolean).join(' · ');
+    $('cntBook').textContent = rec.qty === null ? '—' : sNum(rec.qty) + ' 個';
+    $('cntPrev').hidden = cntCtx.prev === null;
+    $('cntPrev').textContent = cntCtx.prev === null ? '' : `前の値 ${sNum(cntCtx.prev)}`;
+    renderCount();
+    openPanel('cnt', 'cntBg');
+  }
+  function cntTotal() { const x = cntCtx; return x.unit > 0 ? x.b * x.unit + x.p : x.p; }
+  function renderCount() {
+    const x = cntCtx;
+    if (!x) return;
+    const on = x.unit > 0;
+    $('cntBundleRow').hidden = !on;
+    $('cntUnitBox').hidden = !on;
+    $('cntBundleLbl').textContent = x.word;
+    $('cntBundleUnit').textContent = on ? `× ${x.unit}個` : '';
+    $('cntUnitWord').textContent = x.word;
+    $('cntPieceLbl').textContent = on ? '端数' : '個数';
+    $('cntBundle').value = x.b;
+    $('cntPiece').value = x.p;
+    $('cntUnit').value = x.unit || '';
+    const t = cntTotal();
+    $('cntTotal').textContent = sNum(t);
+    const d = x.rec.qty === null ? null : t - x.rec.qty;
+    const em = $('cntDiff');
+    em.className = d === null ? '' : d > 0 ? 'plus' : d < 0 ? 'minus' : 'zero';
+    em.textContent = d === null ? '' : d === 0 ? '帳簿と一致' : `差異 ${d > 0 ? '+' : ''}${sNum(d)}`;
+    $('cntClear').hidden = !countOf(x.m, x.rec);
+  }
+  /** 合計個数から綴り数と端数を割り出して入れ直す。 */
+  function setCntTotal(n) {
+    const x = cntCtx;
+    if (!x) return;
+    n = Math.max(0, Math.round(n));
+    if (x.unit > 0) { x.b = Math.floor(n / x.unit); x.p = n - x.b * x.unit; }
+    else { x.b = 0; x.p = n; }
+    renderCount();
+  }
+  function cntStep(which, d) {
+    const x = cntCtx;
+    if (which === 'bundle') x.b = Math.max(0, (x.b || 0) + d);
+    else x.p = Math.max(0, (x.p || 0) + d);
+    renderCount();
+  }
+  function saveCount() {
+    const x = cntCtx;
+    if (!x) return;
+    const t = cntTotal();
+    putCount(x.m, x.rec, { n: t, b: x.unit > 0 ? x.b : null, p: x.unit > 0 ? x.p : null, u: x.unit || 0, uw: x.word, at: Date.now() });
+    closePanel('cnt', 'cntBg');
+    if (x.onSaved) x.onSaved();
+    cntCtx = null;
+  }
+
+  // ---------------------------------------------------------------- 報告資料
+  function stocktakeStats(m, list) {
+    const s = { n: list.length, done: 0, todo: 0, diff: 0, book: 0, real: 0, bookAmt: 0, realAmt: 0, boxes: 0, boxBundles: 0, boxPieces: 0 };
+    for (const rec of list) {
+      const c = countOf(m, rec);
+      const price = rec.price || 0;
+      s.book += rec.qty || 0;
+      s.bookAmt += rec.amount !== null && rec.amount !== undefined ? rec.amount : (rec.qty || 0) * price;
+      if (!c) { s.todo++; continue; }
+      s.done++;
+      s.real += c.n;
+      s.realAmt += c.n * price;
+      if (rec.qty !== null && c.n !== rec.qty) s.diff++;
+      if (isBoxItem(rec)) {
+        s.boxes++;
+        const u = c.u || BOX_UNIT;
+        s.boxBundles += Math.floor(c.n / u);
+        s.boxPieces += c.n;
+      }
+    }
+    s.diffAmt = s.realAmt - list.reduce((a, r) => a + (countOf(m, r) ? (r.qty || 0) * (r.price || 0) : 0), 0);
+    return s;
+  }
+
+  function openReport(m) {
+    const list = stockFiltered(m);
+    const s = stocktakeStats(m, list);
+    const box = $('rptSum');
+    box.innerHTML = '';
+    const row = (k, v, cls) => { const d = el('div', 'r' + (cls ? ' ' + cls : '')); d.appendChild(el('span', null, k)); d.appendChild(el('b', null, v)); box.appendChild(d); };
+    const head = (t) => { const d = el('div', 'r head'); d.appendChild(el('span', null, t)); box.appendChild(d); };
+    head('棚卸の進捗');
+    row('対象の品番', `${s.n} 件`);
+    row('入力済み', `${s.done} 件`);
+    row('未入力', `${s.todo} 件`, s.todo ? 'warn' : '');
+    row('帳簿と差異あり', `${s.diff} 件`, s.diff ? 'warn' : '');
+    head('数量');
+    row('帳簿在庫の合計', `${sNum(s.book)} 個`);
+    row('実棚の合計（入力分）', `${sNum(s.real)} 個`);
+    if (s.boxes) {
+      head(`箱（${s.boxes} 品番）`);
+      row('綴り数の合計', `${sNum(s.boxBundles)} 綴り`);
+      row('個数の合計', `${sNum(s.boxPieces)} 個`);
+    }
+    head('金額');
+    row('帳簿金額の合計', fmtYen(s.bookAmt));
+    row('実棚金額（入力分）', fmtYen(s.realAmt));
+    row('差異金額', (s.diffAmt > 0 ? '+' : '') + fmtYen(s.diffAmt), s.diffAmt ? 'warn' : '');
+    $('rptNote').textContent = (stockFilterCount(m) || state.query)
+      ? '※ いま絞り込んでいる品番だけが対象です。すべて出すには絞り込みを解除してください。'
+      : '※ 元の Excel ファイルは変更していません。';
+    rptCtx = { m, list, s };
+    openPanel('rpt', 'rptBg');
+  }
+  let rptCtx = null;
+
+  async function buildStocktakeXlsx(m, list, s) {
+    const H = (v) => ({ v, s: 1 });
+    const stamp = fmtDateTime(Date.now());
+    const file = state.fileMeta ? state.fileMeta.name : '';
+    const title = m.stock.title || m.sheet.name;
+    const rows = [
+      [{ v: `棚卸結果 ${title}（${s.done}/${s.n} 件入力）`, s: 6 }],
+      [{ v: `元ファイル: ${file}   作成: ${stamp}   ※元ファイルは変更していません`, s: 3 }],
+      [],
+      ['No', '代表機種', '品番', '品名', '区分', '担当', '手配先', '単位', '1単位の個数',
+       '綴り/ケース数', '端数', '実棚(個)', '帳簿(個)', '差異(個)', '単価', '帳簿金額', '実棚金額', '差異金額', '状態', '備考'].map(H),
+    ];
+    list.forEach((rec, i) => {
+      const c = countOf(m, rec);
+      const bd = bundleOf(rec);
+      const unit = c && c.u ? c.u : bd.unit;
+      const price = rec.price || 0;
+      const book = rec.qty === null ? null : rec.qty;
+      const real = c ? c.n : null;
+      const d = c && book !== null ? c.n - book : null;
+      const bookAmt = rec.amount !== null && rec.amount !== undefined ? rec.amount : (book || 0) * price;
+      rows.push([
+        i + 1, rec.model, rec.code, rec.name, rec.kubun, rec.staff, rec.supplier,
+        unit > 0 ? (isBoxItem(rec) ? '綴り' : 'ケース') : '個', unit > 0 ? unit : null,
+        c && c.b != null ? c.b : (c && unit > 0 ? Math.floor(c.n / unit) : null),
+        c && c.p != null ? c.p : (c && unit > 0 ? c.n - Math.floor(c.n / unit) * unit : null),
+        real === null ? null : { v: real, s: 2 }, book, d === null ? null : { v: d, s: 4 },
+        price, Math.round(bookAmt), real === null ? null : Math.round(real * price),
+        d === null ? null : Math.round(d * price),
+        c ? (d === 0 ? '一致' : '差異') : '未入力', rec.note,
+      ]);
+    });
+    const sum = [
+      [{ v: '棚卸サマリー', s: 6 }],
+      [{ v: `${title}   元ファイル: ${file}   作成: ${stamp}`, s: 3 }],
+      [],
+      ['項目', '値'].map(H),
+      ['対象の品番', s.n], ['入力済み', s.done], ['未入力', s.todo], ['帳簿と差異あり', s.diff],
+      [], ['帳簿在庫の合計(個)', s.book], ['実棚の合計(個)', s.real],
+      [], ['箱の品番数', s.boxes], ['箱の綴り合計', s.boxBundles], ['箱の個数合計', s.boxPieces],
+      [], ['帳簿金額の合計', Math.round(s.bookAmt)], ['実棚金額(入力分)', Math.round(s.realAmt)], ['差異金額', Math.round(s.diffAmt)],
+    ];
+    return XlsxWrite.build([
+      { name: '棚卸結果', cols: [5, 13, 16, 26, 6, 10, 14, 7, 11, 13, 7, 10, 10, 9, 9, 11, 11, 10, 8, 18], rows, freeze: 4, filter: true, filterRange: `A4:T${rows.length}` },
+      { name: 'サマリー', cols: [24, 16], rows: sum, freeze: 4 },
+    ]);
+  }
+
+  function stocktakeMailText(m, s) {
+    const file = state.fileMeta ? state.fileMeta.name : '在庫一覧';
+    const L = [];
+    L.push(`「${file}」の棚卸結果をお送りします。`);
+    L.push('');
+    L.push(`対象の品番: ${s.n} 件（入力済み ${s.done} / 未入力 ${s.todo}）`);
+    L.push(`帳簿と差異あり: ${s.diff} 件`);
+    L.push(`帳簿在庫の合計: ${sNum(s.book)} 個 / 実棚の合計: ${sNum(s.real)} 個`);
+    if (s.boxes) L.push(`箱: ${s.boxes} 品番 / ${sNum(s.boxBundles)} 綴り（${sNum(s.boxPieces)} 個）`);
+    L.push(`帳簿金額: ${fmtYen(s.bookAmt)} / 実棚金額: ${fmtYen(s.realAmt)} / 差異 ${s.diffAmt > 0 ? '+' : ''}${fmtYen(s.diffAmt)}`);
+    L.push('');
+    L.push('詳細は添付の Excel「棚卸結果」をご確認ください。');
+    L.push('※ 元のファイルは変更していません。Order View から送信。');
+    return L.join('\n');
+  }
+
+  async function shareStocktake(mode) {
+    if (!rptCtx) return;
+    const { m, list, s } = rptCtx;
+    try {
+      const d = new Date();
+      const p2 = (n) => String(n).padStart(2, '0');
+      const fname = `棚卸結果_${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}.xlsx`;
+      const subject = `【棚卸】${m.stock.title || m.sheet.name} ${s.done}/${s.n}件（${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}）`;
+      const body = stocktakeMailText(m, s);
+      overlay(true, 'Excel を作成中…', 60);
+      const blob = await buildStocktakeXlsx(m, list, s);
+      overlay(false);
+      const f = new File([blob], fname, { type: blob.type });
+      if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [f] })) {
+        await navigator.share({ files: [f], title: subject, text: body });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      if (mode === 'share') {
+        toast('この端末では共有できないため Excel を保存しました。メールに添付してください');
+        location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      } else toast('Excel を保存しました');
+    } catch (err) {
+      overlay(false);
+      if (err && err.name === 'AbortError') return;
+      console.error(err);
+      toast('作成に失敗しました: ' + (err && err.message ? err.message : err), true);
+    }
   }
 
   const BLANK = '\u0000blank';
@@ -2796,6 +3139,33 @@
     $('updHide').addEventListener('click', () => { updateDismissed = true; $('updbar').hidden = true; });
     $('aboutCheck').addEventListener('click', () => { $('aboutLatest').textContent = '確認中…'; updateDismissed = false; checkForUpdate(true); });
     $('aboutUpdate').addEventListener('click', applyUpdate);
+    // 実棚入力
+    $('cntBg').addEventListener('click', () => closePanel('cnt', 'cntBg'));
+    $('cntClose').addEventListener('click', () => closePanel('cnt', 'cntBg'));
+    for (const b of document.querySelectorAll('#cnt .ed-step')) {
+      b.addEventListener('click', () => { if (cntCtx) cntStep(b.dataset.step, +b.dataset.d); });
+    }
+    $('cntBundle').addEventListener('input', (e) => { if (cntCtx) { cntCtx.b = Math.max(0, parseInt(e.target.value, 10) || 0); renderCount(); } });
+    $('cntPiece').addEventListener('input', (e) => { if (cntCtx) { cntCtx.p = Math.max(0, parseInt(e.target.value, 10) || 0); renderCount(); } });
+    $('cntUnit').addEventListener('input', (e) => { if (cntCtx) { cntCtx.unit = Math.max(1, parseInt(e.target.value, 10) || 1); renderCount(); } });
+    $('cntSame').addEventListener('click', () => { const x = cntCtx; if (!x || x.rec.qty === null) return; setCntTotal(x.rec.qty); });
+    $('cntZero').addEventListener('click', () => setCntTotal(0));
+    $('cntPrev').addEventListener('click', () => { if (cntCtx && cntCtx.prev !== null) setCntTotal(cntCtx.prev); });
+    $('cntSave').addEventListener('click', saveCount);
+    $('cntClear').addEventListener('click', () => {
+      const x = cntCtx;
+      if (!x) return;
+      putCount(x.m, x.rec, null);
+      closePanel('cnt', 'cntBg');
+      if (x.onSaved) x.onSaved();
+      cntCtx = null;
+    });
+    // 報告資料
+    $('rptBg').addEventListener('click', () => closePanel('rpt', 'rptBg'));
+    $('rptClose').addEventListener('click', () => closePanel('rpt', 'rptBg'));
+    $('rptShare').addEventListener('click', () => shareStocktake('share'));
+    $('rptSave').addEventListener('click', () => shareStocktake('save'));
+
     $('aboutBg').addEventListener('click', () => closePanel('about', 'aboutBg'));
     $('aboutClose').addEventListener('click', () => closePanel('about', 'aboutBg'));
 
