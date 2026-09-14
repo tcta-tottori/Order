@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.7.2';
+  const APP_VERSION = '1.7.3';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -2697,6 +2697,8 @@
         renderViewSeg(m);
         renderColsList(m);
         render();
+        // 全画面メニューだと裏の表示が見えないので、表示方法を選んだら閉じる
+        closePanel('viewMenu', 'viewMenuBg');
       });
       seg.appendChild(b);
     }

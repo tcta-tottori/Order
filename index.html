@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja" data-ver="1.7.2">
+<html lang="ja" data-ver="1.7.3">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
-  <link rel="stylesheet" href="css/app.css?v=1.7.2" />
+  <link rel="stylesheet" href="css/app.css?v=1.7.3" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -121,9 +121,10 @@
 
   <!-- bottom: view menu (from FAB) -->
   <div class="sheet-bg" id="viewMenuBg" hidden></div>
-  <div class="panel" id="viewMenu" hidden>
+  <div class="panel full" id="viewMenu" hidden>
     <div class="grip"></div>
     <div class="panel-title"><h2>表示メニュー</h2><button class="iconbtn" id="viewMenuClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <div class="panel-scroll">
     <div class="psec-row"><div class="psec">分割ビュー<small class="psub">上下 2 画面に別のシートを表示</small></div><button class="switch" id="splitSw"></button></div>
     <div class="seg wide" id="paneSeg" hidden></div>
     <div class="psec-row"><div class="psec" id="viewSecLabel">表示方法</div><button class="linkbtn" id="swapPanes" hidden>上下を入れ替え</button></div>
@@ -139,6 +140,7 @@
     <div class="psec-row" id="ltHead" hidden><div class="psec">発注L/T フィルター<small class="psub" id="ltDesc">発注L/T×2（営業日）以内に所要・発注がない品番を隠す</small></div><button class="switch" id="ltSw"></button></div>
     <div class="psec-row" id="colsHead" hidden><div class="psec">表の列（表示/非表示）</div><button class="linkbtn" id="colsReset">初期状態に戻す</button></div>
     <div class="collist" id="colsList" hidden></div>
+    </div>
   </div>
 
   <!-- bottom: settings -->
@@ -161,7 +163,7 @@
 
   <!-- bottom: column filter (Excel-like) -->
   <div class="sheet-bg" id="cfBg" hidden></div>
-  <div class="panel cf" id="cf" hidden>
+  <div class="panel full cf" id="cf" hidden>
     <div class="grip"></div>
     <div class="panel-title"><h2 id="cfTitle">フィルター</h2><button class="iconbtn" id="cfClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
     <label class="search cf-search"><svg><use href="#i-search"/></svg><input id="cfSearch" type="search" placeholder="値を検索" autocomplete="off" /></label>
@@ -244,9 +246,9 @@
   </div><!-- /root -->
 
   <script src="vendor/jszip.min.js"></script>
-  <script src="js/numfmt.js?v=1.7.2"></script>
-  <script src="js/xlsx-lite.js?v=1.7.2"></script>
-  <script src="js/xlsx-write.js?v=1.7.2"></script>
-  <script src="js/app.js?v=1.7.2"></script>
+  <script src="js/numfmt.js?v=1.7.3"></script>
+  <script src="js/xlsx-lite.js?v=1.7.3"></script>
+  <script src="js/xlsx-write.js?v=1.7.3"></script>
+  <script src="js/app.js?v=1.7.3"></script>
 </body>
 </html>
