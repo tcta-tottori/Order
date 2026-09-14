@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.7.0';
+  const APP_VERSION = '1.7.1';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -1699,7 +1699,7 @@
       min: cur && cur.min != null ? cur.min : '',
       max: cur && cur.max != null ? cur.max : '',
       grp: cur && cur.grp ? cur.grp : null,
-      q: '',
+      q: '', picked: false,
     };
     $('cfGrp').hidden = !(m.gridConfig && m.gridConfig.kubunCol && c >= m.gridConfig.dayCol);
     $('cfTitle').textContent = `${title} のフィルター`;
@@ -1724,11 +1724,29 @@
       const box = el('i', 'box'); box.appendChild(svgUse('i-check')); b.appendChild(box);
       b.appendChild(el('span', null, k === BLANK ? '(空白)' : k));
       b.appendChild(el('small', null, String(x.counts.get(k))));
-      b.addEventListener('click', () => { if (x.sel.has(k)) x.sel.delete(k); else x.sel.add(k); b.classList.toggle('on'); });
+      b.addEventListener('click', () => {
+        // 検索で絞り込んだ直後の 1 回目は「その値だけ」にする（初期状態は全選択のため）
+        if (x.q && !x.picked) { x.picked = true; x.sel.clear(); x.sel.add(k); renderCfList(); return; }
+        if (x.sel.has(k)) x.sel.delete(k); else x.sel.add(k);
+        b.classList.toggle('on');
+        updateCfStatus();
+      });
       list.appendChild(b);
     });
     if (!keys.length) list.appendChild(el('div', 'cf-empty', '該当する値がありません'));
     else if (keys.length > LIMIT) list.appendChild(el('div', 'cf-empty', `他 ${keys.length - LIMIT} 件は検索で絞り込んでください`));
+    updateCfStatus();
+  }
+  function updateCfStatus() {
+    const x = cfCtx;
+    const box = $('cfStatus');
+    if (!x || !box) return;
+    box.innerHTML = '';
+    const all = x.keys.length;
+    const n = x.keys.reduce((a, k) => a + (x.sel.has(k) ? 1 : 0), 0);
+    box.appendChild(document.createTextNode('選択 '));
+    box.appendChild(el('b', null, String(n)));
+    box.appendChild(document.createTextNode(` / ${all} 件` + (n === all ? '（すべて表示）' : '')));
   }
   function applyColFilter() {
     const x = cfCtx;
@@ -1785,8 +1803,10 @@
     let rows = visibleRows(m, state.opts.hideEmptyRows);
     const frozenRows = rows.filter((r) => r <= freezeY);
     const rf = m.headerRow ? rowFilter(m) : null;
-    if (rf) rows = rows.filter((r) => r <= freezeY || rf.pass(r));
-    if (state.query) rows = rows.filter((r) => r <= freezeY || rowMatches(m, r));
+    // 見出し行はフィルターの操作口なので、絞り込みで消さない（固定枠のないシート対策）
+    const keepY = Math.max(freezeY, m.headerRow || 0);
+    if (rf) rows = rows.filter((r) => r <= keepY || rf.pass(r));
+    if (state.query) rows = rows.filter((r) => r <= keepY || rowMatches(m, r));
     const bodyRows = rows.filter((r) => r > freezeY);
     const cfActive = m.headerRow ? colFilters(m) : {};
     const showHead = state.opts.showHeaders;
@@ -2539,13 +2559,26 @@
   function hideCellInfo() { $('cellinfo').classList.remove('show'); }
 
   // ---------------------------------------------------------------- bottom panels
+  /** ソフトキーボードが覆う高さを --kb に入れ、パネルがその上に収まるようにする。 */
+  function syncKeyboardInset() {
+    const vv = window.visualViewport;
+    const rotated = document.body.classList.contains('rot90') || document.body.classList.contains('rotm90');
+    // 画面を CSS で回転しているときは軸が合わないので押し上げない
+    let kb = 0;
+    if (vv && !rotated) kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    document.documentElement.style.setProperty('--kb', kb + 'px');
+  }
   function openPanel(id, bgId) {
     $(bgId).hidden = false; $(id).hidden = false;
+    syncKeyboardInset();
     requestAnimationFrame(() => { $(bgId).classList.add('show'); $(id).classList.add('show'); });
   }
   function closePanel(id, bgId) {
-    $(bgId).classList.remove('show'); $(id).classList.remove('show');
-    setTimeout(() => { $(bgId).hidden = true; $(id).hidden = true; }, 220);
+    const p = $(id);
+    const focused = p.contains(document.activeElement) ? document.activeElement : null;
+    if (focused && focused.blur) focused.blur(); // キーボードを閉じてから畳む
+    $(bgId).classList.remove('show'); p.classList.remove('show');
+    setTimeout(() => { $(bgId).hidden = true; p.hidden = true; }, 220);
   }
   function syncSettings() {
     for (const sw of document.querySelectorAll('.switch[data-opt]')) sw.classList.toggle('on', !!state.opts[sw.dataset.opt]);
@@ -2719,11 +2752,20 @@
     $('cfClose').addEventListener('click', () => closePanel('cf', 'cfBg'));
     $('cfApply').addEventListener('click', applyColFilter);
     $('cfReset').addEventListener('click', () => { if (cfCtx) { setColFilter(cfCtx.m, cfCtx.c, null); closePanel('cf', 'cfBg'); render(); } });
-    $('cfAll').addEventListener('click', () => { if (!cfCtx) return; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.add(k); renderCfList(); });
-    $('cfNone').addEventListener('click', () => { if (!cfCtx) return; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.delete(k); renderCfList(); });
+    $('cfAll').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.add(k); renderCfList(); });
+    $('cfNone').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.delete(k); renderCfList(); });
     $('cfNonEmpty').addEventListener('click', () => { if (!cfCtx) return; cfCtx.nonEmpty = !cfCtx.nonEmpty; renderCfList(); });
     let cfTimer = null;
-    $('cfSearch').addEventListener('input', (e) => { clearTimeout(cfTimer); cfTimer = setTimeout(() => { if (cfCtx) { cfCtx.q = e.target.value.trim().toLowerCase(); renderCfList(); } }, 200); });
+    $('cfSearch').addEventListener('input', (e) => {
+      clearTimeout(cfTimer);
+      cfTimer = setTimeout(() => {
+        if (!cfCtx) return;
+        const q = e.target.value.trim().toLowerCase();
+        if (q !== cfCtx.q) { cfCtx.q = q; cfCtx.picked = false; }
+        renderCfList();
+      }, 200);
+    });
+    $('cfSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
     $('filtClear').addEventListener('click', () => { const m = state.prepared.get(state.sheetIdx); if (!m) return; delete state.colFilters[m.sheet.name]; savePrefs(); renderViewMenu(); render(); });
     $('ltSw').addEventListener('click', () => { state.opts.ltFilter = !state.opts.ltFilter; savePrefs(); renderViewMenu(); render(); });
     $('splitSw').addEventListener('click', async () => { await setSplit(!state.split); renderViewMenu(); });
@@ -2758,6 +2800,16 @@
     home.addEventListener('drop', (e) => { const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) openFile(f); });
 
     window.addEventListener('resize', () => { const t = document.querySelector('table.grid'); if (t) stickyOffsets(t); });
+
+    // ソフトキーボードの開閉に合わせてパネルの高さを詰める
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', syncKeyboardInset);
+      vv.addEventListener('scroll', syncKeyboardInset);
+    }
+    window.addEventListener('resize', syncKeyboardInset);
+    document.addEventListener('focusin', (e) => { if (e.target && e.target.matches && e.target.matches('input, textarea')) setTimeout(syncKeyboardInset, 60); });
+    document.addEventListener('focusout', () => setTimeout(syncKeyboardInset, 60));
   }
 
   function renderTargetChips() {
@@ -2777,6 +2829,7 @@
     $('drawerBrandVer').textContent = 'v' + APP_VERSION;
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
     applyOrientation();
+    syncKeyboardInset();
     // stale HTML + new JS (or the reverse) must never run together: reload once with a cache-busting URL
     const htmlVer = document.documentElement.getAttribute('data-ver');
     if (htmlVer !== APP_VERSION && !sessionStorage.getItem('ov-reloaded')) {
