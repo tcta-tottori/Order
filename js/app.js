@@ -2,8 +2,8 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.6.3';
-  const APP_DATE = '2026-09-07';
+  const APP_VERSION = '1.7.0';
+  const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
   const LS_KEY = 'orderviewer:v2';
@@ -43,6 +43,8 @@
     splitRatio: 0.5,
     splitNames: [null, null],
     colFilters: {}, // sheetName -> { col: { values: [..]|null, nonEmpty: bool, min: n|null, max: n|null, grp: 'order'|'demand'|null } }
+    stockUi: {},    // sheetName -> { sort, f: { kubun: [..] }, unchecked, still, panel } (在庫ビュー)
+    checks: {},     // fileName -> { sheetName -> { 品番: 確認した時刻 } }
     editsByFile: {}, // fileName -> { sheetName -> { "r,c": { v, orig, at } } }
     edits: {},       // edits of the open file (alias into editsByFile)
     editVer: 0,
@@ -65,6 +67,8 @@
         state.splitRatio = p.splitRatio || 0.5;
         state.splitNames = p.splitNames || [null, null];
         state.colFilters = p.colFilters || {};
+        state.stockUi = p.stockUi || {};
+        state.checks = p.checks || {};
         state.editsByFile = p.editsByFile || {};
       }
     } catch (e) { /* ignore */ }
@@ -72,7 +76,7 @@
   function savePrefs() {
     try {
       const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, editsByFile: state.editsByFile }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, stockUi: state.stockUi, checks: state.checks, editsByFile: state.editsByFile }));
     } catch (e) { /* ignore */ }
   }
 
@@ -343,7 +347,8 @@
     m = makeModel(sheet, state.book.styles);
     m.headerRow = detectHeader(m);
     m.schedule = detectSchedule(m);
-    m.gridConfig = m.schedule ? null : detectGridConfig(m);
+    m.stock = m.schedule ? null : detectStock(m);
+    m.gridConfig = m.schedule || m.stock ? null : detectGridConfig(m);
     state.prepared.set(sheetIndex, m);
     return m;
   }
@@ -520,12 +525,14 @@
   function availableViews(m) {
     const v = [];
     if (m.schedule) { v.push('daily', 'grid', 'raw'); return v; }
+    if (m.stock) v.push('stock');
     if (m.headerRow > 0 && m.sheet.maxRow > m.headerRow) v.push('cards');
     v.push('grid');
     return v;
   }
   function defaultView(m, available) {
     if (available.includes('daily')) return 'daily';
+    if (available.includes('stock')) return 'stock';
     if (m.gridConfig) return 'grid';
     if (available.includes('cards')) return 'cards';
     return 'grid';
@@ -606,6 +613,7 @@
       return;
     }
     if (pn.view === 'daily') renderDaily(m, body);
+    else if (pn.view === 'stock' && m.stock) renderStock(m, body);
     else if (pn.view === 'cards') renderCards(m, body);
     else if (pn.view === 'grid' && m.schedule) renderScheduleGrid(m, body);
     else renderGrid(m, body);
@@ -1094,6 +1102,13 @@
     box.innerHTML = '';
     const add = (text, cls, icon, title) => { const sp = el('span', 'fs' + (cls ? ' ' + cls : '')); if (icon) sp.appendChild(svgUse(icon)); sp.appendChild(document.createTextNode(text)); if (title) sp.title = title; box.appendChild(sp); };
     if (state.query) add(state.query, '', 'i-search', '検索');
+    if (m && m.stock) {
+      const cm = stockChecks(m);
+      const n = stockRowSet(m).reduce((a, r) => a + (cm[checkKey(stockRec(m, r))] ? 1 : 0), 0);
+      const nf = stockFilterCount(m);
+      if (nf) add(String(nf), '', 'i-filter', `${nf}項目で絞り込み`);
+      if (n) add(`${n}`, 'chg', 'i-check', `確認済み ${n}件`);
+    }
     if (m && m.gridConfig) {
       const cf = colFilters(m);
       const n = Object.keys(cf).length;
@@ -1123,6 +1138,462 @@
       } catch (e) { /* not supported */ }
     }
     return changed;
+  }
+
+  // ---------------------------------------------------------------- 在庫シート（在庫チェック）
+  const YM_RE = /^(20\d{2})(0[1-9]|1[0-2])$/;
+  const STOCK_SORTS = [['sheet', 'Excel順'], ['amount', '金額順'], ['qty', '在庫数順'], ['still', '動きなし順'], ['code', '品番順']];
+  const STOCK_GROUPS = [['kubun', '区分'], ['staff', '担当'], ['supplier', '手配先'], ['dept', '管理部署'], ['note', '備考'], ['item', '項目']];
+  const STOCK_STILL = 6; // 「動きなし」とみなす月数
+
+  /** 品番列と 6 つ以上の YYYYMM 列を持つ在庫一覧シートを判定する。 */
+  function detectStock(m) {
+    const hr = m.headerRow;
+    if (!hr) return null;
+    const s = m.sheet;
+    const heads = [];
+    for (let c = 1; c <= s.maxCol; c++) {
+      const cl = m.cell(hr, c);
+      let t = m.text(cl);
+      if (cl && cl.t === 'n' && !m.isDateCell(cl)) t = String(cl.v); // 202407 が数値保存の場合
+      heads.push({ c, text: (t || '').replace(/\s+/g, ' ').trim() });
+    }
+    const months = heads.filter((h) => YM_RE.test(h.text)).map((h) => ({ c: h.c, ym: h.text }));
+    if (months.length < 6) return null;
+    const pick = (...res) => { for (const re of res) { const h = heads.find((x) => x.text && re.test(x.text)); if (h) return h.c; } return 0; };
+    const st = {
+      heads, months,
+      code: pick(/^ZaiHinCD$/i, /品番/),
+      name: pick(/^HinNam$/i, /^品名$/, /品名/),
+      model: pick(/^HinNam2$/i, /代表機種/, /機種/),
+      price: pick(/^TnkTnk$/i, /単価/),
+      avg: pick(/平均確認/, /^在庫数$/),
+      amount: pick(/^金額$/, /金額/),
+      total: pick(/^TOTAL$/i, /^合計$/),
+      kubun: pick(/^区分$/),
+      dept: pick(/^KanBuNam$/i, /管理部/, /部署/),
+      staff: pick(/^NamNam$/i, /担当/),
+      supplier: pick(/^TehTehaiNam$/i, /手配先/),
+      inDay: pick(/^HinNyuDay$/i, /入庫日/),
+      outDay: pick(/^HinSyuDay$/i, /出庫日/),
+      caseQty: pick(/^HinCsSuL$/i, /入数/),
+      customer: pick(/^客先$/),
+      item: pick(/^項目$/),
+      note: pick(/^備考$/),
+      cache: new Map(),
+    };
+    if (!st.code) return null;
+    const used = new Set(months.map((x) => x.c));
+    for (const k of ['code', 'name', 'model', 'price', 'avg', 'amount', 'total', 'kubun', 'dept', 'staff', 'supplier', 'inDay', 'outDay', 'caseQty', 'customer', 'item', 'note']) if (st[k]) used.add(st[k]);
+    // 残りの列は「関連品番（品番が並ぶ備考列）」と「その他の項目」に振り分ける
+    st.rel = [];
+    st.extra = [];
+    for (const h of heads) {
+      if (!h.text || used.has(h.c) || m.hiddenCol(h.c)) continue;
+      let n = 0, codeish = 0;
+      for (let r = hr + 1; r <= s.maxRow; r++) {
+        const cl = m.cell(r, h.c);
+        if (!cl || cl.v === null || cl.v === undefined) continue;
+        n++;
+        if (/^[0-9A-Z][0-9A-Z-]{5,}$/.test(m.text(cl))) codeish++;
+      }
+      if (!n) continue; // 空の列は出さない
+      if (/備考|関連|使用先/.test(h.text) && codeish / n >= 0.8) st.rel.push(h.c);
+      else st.extra.push({ c: h.c, text: h.text });
+    }
+    st.rows = [];      // Excel で表示されている行
+    st.allRows = [];   // Excel のオートフィルターで隠れている行も含む
+    for (let r = hr + 1; r <= s.maxRow; r++) {
+      if (!m.rowHasValue[r]) continue;
+      st.allRows.push(r);
+      if (!m.hiddenRow(r)) st.rows.push(r);
+    }
+    if (!st.allRows.length) return null;
+    st.hiddenCount = st.allRows.length - st.rows.length;
+    st.title = '';
+    for (let r = 1; r < hr && !st.title; r++) {
+      for (let c = 1; c <= s.maxCol; c++) { const cl = m.cell(r, c); if (cl && cl.t === 's' && m.text(cl)) { st.title = m.text(cl); break; } }
+    }
+    return st;
+  }
+
+  function stockNum(m, r, c) {
+    if (!c) return null;
+    const cl = m.cell(r, c);
+    if (!cl || cl.v === null || cl.v === undefined) return null;
+    if (cl.t === 'n') return cl.v;
+    const v = parseFloat(String(cl.v).replace(/,/g, ''));
+    return Number.isFinite(v) ? v : null;
+  }
+
+  /** 1 行 = 1 品番のレコード（在庫推移・動きなし月数などの派生値つき）。 */
+  function stockRec(m, r) {
+    const st = m.stock;
+    let rec = st.cache.get(r);
+    if (rec) return rec;
+    const txt = (c) => (c ? m.text(m.cell(r, c)) : '');
+    const trend = st.months.map((mo) => ({ ym: mo.ym, v: stockNum(m, r, mo.c) }));
+    const vals = trend.map((t) => (t.v === null ? 0 : t.v));
+    const last = vals.length ? vals[vals.length - 1] : null;
+    const prev = vals.length > 1 ? vals[vals.length - 2] : null;
+    const avg = stockNum(m, r, st.avg);
+    const qty = last !== null ? last : avg;
+    let same = 1;
+    for (let i = vals.length - 2; i >= 0 && vals[i] === vals[vals.length - 1]; i--) same++;
+    rec = {
+      r, trend, vals,
+      code: txt(st.code), name: txt(st.name), model: txt(st.model),
+      kubun: txt(st.kubun), dept: txt(st.dept), staff: txt(st.staff), supplier: txt(st.supplier),
+      note: txt(st.note), item: txt(st.item), customer: txt(st.customer),
+      inDay: txt(st.inDay), outDay: txt(st.outDay), caseQty: txt(st.caseQty),
+      price: stockNum(m, r, st.price),
+      amount: stockNum(m, r, st.amount),
+      total: stockNum(m, r, st.total),
+      avg, qty, prev,
+      delta: qty !== null && prev !== null ? qty - prev : null,
+      peak: vals.length ? Math.max.apply(null, vals) : 0,
+      still: last > 0 ? same - 1 : 0, // 在庫が動いていない月数
+      rel: st.rel.map((c) => txt(c)).filter(Boolean),
+    };
+    st.cache.set(r, rec);
+    return rec;
+  }
+
+  function stockUi(m) {
+    const k = m.sheet.name;
+    let u = state.stockUi[k];
+    if (!u) u = state.stockUi[k] = {};
+    if (!u.sort) u.sort = 'sheet';
+    if (!u.f) u.f = {};
+    return u;
+  }
+  function stockChecks(m) {
+    const f = state.fileMeta ? state.fileMeta.name : '-';
+    const byFile = state.checks[f] || (state.checks[f] = {});
+    return byFile[m.sheet.name] || (byFile[m.sheet.name] = {});
+  }
+  const checkKey = (rec) => rec.code || 'r' + rec.r;
+  /** 表示対象の行。Excel のオートフィルターで隠れた行は「すべて表示」時のみ含める。 */
+  function stockRowSet(m) {
+    const st = m.stock;
+    return stockUi(m).showHidden ? st.allRows : st.rows;
+  }
+
+  function stockFiltered(m) {
+    const st = m.stock, ui = stockUi(m), cm = stockChecks(m);
+    const rf = rowFilter(m);
+    let list = stockRowSet(m).filter((r) => rf.pass(r)).map((r) => stockRec(m, r));
+    if (state.query) list = list.filter((rec) => rowMatches(m, rec.r));
+    for (const [key] of STOCK_GROUPS) {
+      const sel = ui.f[key];
+      if (sel && sel.length) list = list.filter((rec) => sel.indexOf(rec[key] || '') >= 0);
+    }
+    if (ui.unchecked) list = list.filter((rec) => !cm[checkKey(rec)]);
+    if (ui.still) list = list.filter((rec) => rec.still >= STOCK_STILL);
+    const n = (v) => (v === null || v === undefined ? -Infinity : v);
+    if (ui.sort === 'amount') list.sort((a, b) => n(b.amount) - n(a.amount));
+    else if (ui.sort === 'qty') list.sort((a, b) => n(b.qty) - n(a.qty));
+    else if (ui.sort === 'still') list.sort((a, b) => b.still - a.still || n(b.amount) - n(a.amount));
+    else if (ui.sort === 'code') list.sort((a, b) => String(a.code).localeCompare(String(b.code), 'ja'));
+    return list;
+  }
+  function stockFilterCount(m) {
+    const ui = stockUi(m);
+    let n = 0;
+    for (const [key] of STOCK_GROUPS) if (ui.f[key] && ui.f[key].length) n++;
+    if (ui.unchecked) n++;
+    if (ui.still) n++;
+    return n;
+  }
+
+  const sNum = (v) => (v === null || v === undefined ? '—' : v.toLocaleString('ja-JP', { maximumFractionDigits: 2 }));
+  const fmtYen = (v) => (v === null || v === undefined ? '—' : '¥' + Math.round(v).toLocaleString('ja-JP'));
+  const fmtYm = (ym) => ym.slice(2, 4) + '/' + String(+ym.slice(4, 6));
+  const fmtYmd = (s) => (/^\d{8}$/.test(s) ? `${s.slice(0, 4)}/${+s.slice(4, 6)}/${+s.slice(6, 8)}` : s);
+  function noteTone(text) {
+    if (!text) return '';
+    if (/廃棄|処分|スクラップ/.test(text)) return 'bad';
+    if (/確認|判断|交渉|検討/.test(text)) return 'warn';
+    if (/使用|消化|売上|買取/.test(text)) return 'ok';
+    return '';
+  }
+
+  /** 在庫推移のスパークライン（縦は 0〜最大値）。 */
+  function stockSpark(rec) {
+    const wrap = el('div', 'spark-wrap');
+    const vals = rec.vals;
+    if (!vals.length) return wrap;
+    const NS = 'http://www.w3.org/2000/svg';
+    const W = 100, H = 30, max = Math.max(rec.peak, 1);
+    const px = (i) => (vals.length > 1 ? (i * W) / (vals.length - 1) : W / 2);
+    const py = (v) => H - 3 - (v / max) * (H - 6);
+    const pts = vals.map((v, i) => px(i).toFixed(2) + ',' + py(v).toFixed(2)).join(' ');
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'spark');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    const area = document.createElementNS(NS, 'polygon');
+    area.setAttribute('class', 'area');
+    area.setAttribute('points', `0,${H} ${pts} ${W},${H}`);
+    const line = document.createElementNS(NS, 'polyline');
+    line.setAttribute('class', 'ln');
+    line.setAttribute('points', pts);
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    svg.appendChild(area);
+    svg.appendChild(line);
+    wrap.appendChild(svg);
+    const dot = el('i', 'dot');
+    dot.style.top = ((py(vals[vals.length - 1]) / H) * 100).toFixed(2) + '%';
+    wrap.appendChild(dot);
+    const ax = el('div', 'spark-ax');
+    ax.appendChild(el('span', null, fmtYm(rec.trend[0].ym)));
+    ax.appendChild(el('span', 'mx', '最大 ' + sNum(rec.peak)));
+    ax.appendChild(el('span', null, fmtYm(rec.trend[rec.trend.length - 1].ym)));
+    const box = el('div');
+    box.appendChild(wrap);
+    box.appendChild(ax);
+    return box;
+  }
+
+  function renderStock(m, container) {
+    const st = m.stock, ui = stockUi(m), cm = stockChecks(m);
+    const list = stockFiltered(m);
+    const nf = stockFilterCount(m);
+
+    // ---- 上部バー（集計・並び替え・絞り込み）
+    const bar = el('div', 'stock-bar');
+    const stats = el('div', 'stock-stats');
+    const tile = (k, v, cls) => { const d = el('div', 'stile' + (cls ? ' ' + cls : '')); d.appendChild(el('i', null, k)); d.appendChild(el('b', null, v)); return d; };
+    const nRows = stockRowSet(m).length;
+    stats.appendChild(tile('品番', list.length + (list.length !== nRows ? ' / ' + nRows : '')));
+    stats.appendChild(tile('在庫金額', fmtYen(list.reduce((a, x) => a + (x.amount || 0), 0))));
+    const done = list.filter((x) => cm[checkKey(x)]).length;
+    const prog = tile('確認済み', done + ' / ' + list.length, 'prog');
+    const pbar = el('span', 'pbar'), pfill = el('i');
+    pfill.style.width = (list.length ? (done / list.length) * 100 : 0) + '%';
+    pbar.appendChild(pfill);
+    prog.appendChild(pbar);
+    stats.appendChild(prog);
+    bar.appendChild(stats);
+
+    const tools = el('div', 'stock-tools');
+    const toolBtn = (label, on, fn, extra) => {
+      const b = el('button', 'schip' + (on ? ' on' : ''));
+      b.appendChild(document.createTextNode(label));
+      if (extra) b.appendChild(el('em', null, extra));
+      b.appendChild(svgUse('i-chev'));
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const sortLabel = (STOCK_SORTS.find((x) => x[0] === ui.sort) || STOCK_SORTS[0])[1];
+    tools.appendChild(toolBtn('並び替え', ui.panel === 'sort', () => { ui.panel = ui.panel === 'sort' ? '' : 'sort'; savePrefs(); render(); }, sortLabel));
+    tools.appendChild(toolBtn('絞り込み', ui.panel === 'filter', () => { ui.panel = ui.panel === 'filter' ? '' : 'filter'; savePrefs(); render(); }, nf ? String(nf) : ''));
+    const quick = (label, key, extra) => {
+      const b = el('button', 'schip q' + (ui[key] ? ' on' : ''));
+      b.appendChild(document.createTextNode(label));
+      if (extra) b.appendChild(el('em', null, extra));
+      b.addEventListener('click', () => { ui[key] = !ui[key]; savePrefs(); render(); });
+      return b;
+    };
+    tools.appendChild(quick('未確認のみ', 'unchecked'));
+    tools.appendChild(quick('動きなし', 'still', `${STOCK_STILL}か月`));
+    if (st.hiddenCount) tools.appendChild(quick('Excel非表示', 'showHidden', ui.showHidden ? '表示中' : '+' + st.hiddenCount));
+    bar.appendChild(tools);
+
+    if (ui.panel === 'sort') {
+      const row = el('div', 'stock-panel');
+      for (const [key, label] of STOCK_SORTS) {
+        const b = el('button', 'fchip' + (ui.sort === key ? ' on' : ''));
+        b.textContent = label;
+        b.addEventListener('click', () => { ui.sort = key; savePrefs(); render(); });
+        row.appendChild(b);
+      }
+      bar.appendChild(row);
+    }
+    if (ui.panel === 'filter') {
+      const box = el('div', 'stock-panel col');
+      let any = false;
+      for (const [key, label] of STOCK_GROUPS) {
+        const seen = new Map();
+        for (const r of stockRowSet(m)) { const v = stockRec(m, r)[key] || ''; if (v) seen.set(v, (seen.get(v) || 0) + 1); }
+        if (seen.size < 2 || seen.size > 40) continue;
+        any = true;
+        const grp = el('div', 'sgroup');
+        grp.appendChild(el('div', 'sglabel', label));
+        const row = el('div', 'srow');
+        const sel = ui.f[key] || [];
+        for (const [v, n] of Array.from(seen.entries()).sort((a, b) => b[1] - a[1])) {
+          const b = el('button', 'fchip' + (sel.indexOf(v) >= 0 ? ' on' : ''));
+          b.appendChild(document.createTextNode(v));
+          b.appendChild(el('em', null, String(n)));
+          b.addEventListener('click', () => {
+            const cur = (ui.f[key] || []).slice();
+            const i = cur.indexOf(v);
+            if (i >= 0) cur.splice(i, 1); else cur.push(v);
+            if (cur.length) ui.f[key] = cur; else delete ui.f[key];
+            savePrefs(); render();
+          });
+          row.appendChild(b);
+        }
+        grp.appendChild(row);
+        box.appendChild(grp);
+      }
+      if (!any) box.appendChild(el('div', 'psub', '絞り込みに使える項目がありません'));
+      const foot = el('div', 'srow foot');
+      const clr = el('button', 'linkbtn', '絞り込みを解除');
+      clr.addEventListener('click', () => { ui.f = {}; ui.unchecked = false; ui.still = false; savePrefs(); render(); });
+      foot.appendChild(clr);
+      const unc = el('button', 'linkbtn', '確認済みをすべて解除');
+      unc.addEventListener('click', () => {
+        if (!Object.keys(cm).length) { toast('確認済みの品番はありません'); return; }
+        for (const k of Object.keys(cm)) delete cm[k];
+        savePrefs(); render();
+      });
+      foot.appendChild(unc);
+      box.appendChild(foot);
+      bar.appendChild(box);
+    }
+    container.appendChild(bar);
+
+    // 確認済みチェックの増減を、再描画せずに集計へ反映する
+    const sync = () => {
+      const cur = list.filter((x) => cm[checkKey(x)]).length;
+      prog.querySelector('b').textContent = cur + ' / ' + list.length;
+      pfill.style.width = (list.length ? (cur / list.length) * 100 : 0) + '%';
+      setCount(container, (state.query || nf ? `${list.length}件が該当` : `${list.length}件`) + (cur ? ` · 確認 ${cur}` : ''));
+    };
+    sync();
+
+    // ---- カード一覧（スクロールに合わせて追加描画）
+    const scroller = el('div', 'scroller');
+    const wrap = el('div', 'stocklist');
+    if (st.title) wrap.appendChild(el('div', 'stock-title', st.title));
+    if (!list.length) wrap.appendChild(el('div', 'emptystate', state.query || nf ? '該当する品番がありません' : 'データがありません'));
+    let pos = 0;
+    const CHUNK = 30;
+    const sentinel = el('div');
+    sentinel.style.height = '1px';
+    const io = new IntersectionObserver((en) => { if (en.some((e) => e.isIntersecting)) more(); }, { root: scroller, rootMargin: '800px' });
+    function more() {
+      const end = Math.min(list.length, pos + CHUNK);
+      const frag = document.createDocumentFragment();
+      for (; pos < end; pos++) frag.appendChild(buildStockCard(m, list[pos], sync));
+      wrap.appendChild(frag);
+      if (pos >= list.length) { io.disconnect(); sentinel.remove(); }
+    }
+    more();
+    wrap.appendChild(sentinel);
+    scroller.appendChild(wrap);
+    container.appendChild(scroller);
+    if (pos < list.length) io.observe(sentinel);
+  }
+
+  function buildStockCard(m, rec, sync) {
+    const st = m.stock, cm = stockChecks(m);
+    const card = el('div', 'scard' + (cm[checkKey(rec)] ? ' done' : ''));
+
+    const head = el('div', 'scard-head');
+    const chk = el('button', 'schk');
+    chk.setAttribute('aria-label', '確認済みにする');
+    chk.appendChild(svgUse('i-check'));
+    chk.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const k = checkKey(rec);
+      if (cm[k]) delete cm[k]; else cm[k] = Date.now();
+      card.classList.toggle('done', !!cm[k]);
+      savePrefs();
+      sync();
+    });
+    head.appendChild(chk);
+    const ttl = el('div', 'ttl');
+    ttl.appendChild(el('b', null, rec.code || `${rec.r} 行目`));
+    const sub = [rec.name, rec.model].filter(Boolean).join(' · ');
+    if (sub) ttl.appendChild(el('span', null, sub));
+    head.appendChild(ttl);
+    if (rec.kubun) { const bg = el('span', 'kbadge'); bg.dataset.k = rec.kubun; bg.textContent = rec.kubun; head.appendChild(bg); }
+    card.appendChild(head);
+
+    const nums = el('div', 'snums');
+    const numBox = (k, v, cls) => { const d = el('div', 'snum' + (cls ? ' ' + cls : '')); d.appendChild(el('i', null, k)); d.appendChild(el('b', null, v)); return d; };
+    const lastYm = st.months.length ? fmtYm(st.months[st.months.length - 1].ym) : '';
+    const qtyBox = numBox(lastYm ? `在庫数（${lastYm}）` : '在庫数', sNum(rec.qty), 'big');
+    if (rec.delta) {
+      const d = el('span', 'delta' + (rec.delta > 0 ? ' up' : ' down'));
+      d.textContent = (rec.delta > 0 ? '+' : '') + sNum(rec.delta);
+      qtyBox.appendChild(d);
+    }
+    nums.appendChild(qtyBox);
+    nums.appendChild(numBox('在庫金額', fmtYen(rec.amount), 'big'));
+    if (rec.price !== null) nums.appendChild(numBox('単価', fmtYen(rec.price)));
+    card.appendChild(nums);
+
+    if (rec.vals.length) {
+      const sp = el('div', 'sspark');
+      sp.appendChild(stockSpark(rec));
+      card.appendChild(sp);
+    }
+
+    const tags = el('div', 'stags');
+    if (rec.still >= STOCK_STILL) tags.appendChild(el('span', 'tag warn', `${rec.still}か月 動きなし`));
+    if (rec.note) tags.appendChild(el('span', 'tag ' + noteTone(rec.note), rec.note));
+    if (rec.item) tags.appendChild(el('span', 'tag', rec.item));
+    if (tags.childNodes.length) card.appendChild(tags);
+
+    const chips = el('div', 'schips');
+    const chip = (k, v) => { if (!v) return; const c = el('span', 'schip-i'); c.appendChild(el('i', null, k)); c.appendChild(document.createTextNode(v)); chips.appendChild(c); };
+    chip('担当', rec.staff);
+    chip('手配先', rec.supplier);
+    chip('管理部署', rec.dept);
+    chip('入庫', fmtYmd(rec.inDay));
+    chip('出庫', fmtYmd(rec.outDay));
+    chip('入数', rec.caseQty ? sNum(parseFloat(rec.caseQty)) : '');
+    if (chips.childNodes.length) card.appendChild(chips);
+
+    if (rec.rel.length) {
+      const rel = el('div', 'srel');
+      rel.appendChild(el('i', null, '関連品番'));
+      for (const v of rec.rel) rel.appendChild(el('span', null, v));
+      card.appendChild(rel);
+    }
+
+    const more = el('button', 'smore', '明細を表示');
+    const detail = el('div', 'sdetail');
+    detail.hidden = true;
+    let built = false;
+    more.addEventListener('click', () => {
+      if (!built) { buildStockDetail(m, rec, detail); built = true; }
+      detail.hidden = !detail.hidden;
+      more.textContent = detail.hidden ? '明細を表示' : '明細を隠す';
+    });
+    card.appendChild(more);
+    card.appendChild(detail);
+    return card;
+  }
+
+  function buildStockDetail(m, rec, box) {
+    const st = m.stock;
+    const kv = el('div', 'sfields');
+    const field = (k, v) => { if (v === '' || v === null || v === undefined) return; const f = el('div', 'sfield'); f.appendChild(el('div', 'k', k)); f.appendChild(el('div', 'v', v)); kv.appendChild(f); };
+    if (rec.name) field('品名', rec.name);
+    if (rec.model) field('代表機種', rec.model);
+    if (rec.customer) field('客先', rec.customer);
+    if (rec.avg !== null && rec.avg !== rec.qty) field('平均確認', sNum(rec.avg));
+    if (rec.total !== null) field('推移の合計', sNum(rec.total));
+    for (const h of st.extra) { const v = m.text(m.cell(rec.r, h.c)); if (v) field(h.text, v); }
+    field('Excel の行', String(rec.r) + ' 行目');
+    if (kv.childNodes.length) box.appendChild(kv);
+
+    const tbl = el('div', 'strend');
+    tbl.appendChild(el('div', 'k', '在庫推移'));
+    const grid = el('div', 'sgrid');
+    for (const t of rec.trend) {
+      const cell = el('div', 'sg' + (t.v ? '' : ' zero'));
+      cell.appendChild(el('i', null, fmtYm(t.ym)));
+      cell.appendChild(el('b', null, t.v === null ? '—' : sNum(t.v)));
+      grid.appendChild(cell);
+    }
+    tbl.appendChild(grid);
+    box.appendChild(tbl);
   }
 
   const BLANK = '\u0000blank';
@@ -2082,7 +2553,7 @@
     for (const b of document.querySelectorAll('#orientSeg button')) b.classList.toggle('on', b.dataset.orient === (state.opts.orient || 'auto'));
   }
 
-  const VIEW_LABELS = { daily: ['日別', 'i-cal'], cards: ['カード', 'i-cards'], grid: ['表', 'i-grid'], raw: ['Excel', 'i-sheet'] };
+  const VIEW_LABELS = { daily: ['日別', 'i-cal'], stock: ['在庫', 'i-stock'], cards: ['カード', 'i-cards'], grid: ['表', 'i-grid'], raw: ['Excel', 'i-sheet'] };
   function openViewMenu() {
     if (!state.book) return;
     renderViewMenu();

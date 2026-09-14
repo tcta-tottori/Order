@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja" data-ver="1.6.3">
+<html lang="ja" data-ver="1.7.0">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
-  <link rel="stylesheet" href="css/app.css?v=1.6.3" />
+  <link rel="stylesheet" href="css/app.css?v=1.7.0" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -40,6 +40,7 @@
       <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M6 10l6 6 6-6M4 20h16"/></symbol>
       <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+      <symbol id="i-stock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.2 12 4l9 4.2v7.6L12 20l-9-4.2z"/><path d="M3 8.2 12 12.4l9-4.2M12 12.4V20"/></symbol>
       <symbol id="i-columns" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></symbol>
     </defs>
   </svg>
@@ -63,7 +64,7 @@
         <div class="hero">
           <img class="logo-img" src="icons/icon-192.png" alt="" width="84" height="84" />
           <h1>Order View</h1>
-          <p>Excel の発注ブックをスマホで見やすく表示します</p>
+          <p>Excel の発注ブック・在庫一覧をスマホで見やすく表示します</p>
         </div>
         <button class="bigbtn" id="pickBtn"><svg><use href="#i-folder"/></svg>ファイルを選択</button>
         <input id="fileInput" type="file" hidden
@@ -75,6 +76,7 @@
         <div class="note">
           <h3>表示対象のシート</h3>
           <div>「直近」と、「所要(調整)」より右側にあるシート（ハコ・各業者）を表示します。</div>
+          <div>品番と月ごと（YYYYMM）の在庫列がある在庫一覧シートは、<b>在庫チェック画面</b>で表示します。</div>
           <div class="chips" id="targetChips"></div>
         </div>
         <div class="note" id="hint">
@@ -82,6 +84,7 @@
           <ul>
             <li>「ファイルを選択」からスマホ内・iCloud・Google ドライブ等の .xlsm / .xlsx を開きます。</li>
             <li>左上の <b>≡</b> でシートの切り替え、右下の <b>✎</b> で表示方法・検索・列の表示/非表示を変更できます。</li>
+            <li>在庫一覧では、品番ごとのカードを並び替え・絞り込みしながら、確認できた品番にチェックを付けられます。</li>
             <li>読み込んだファイルは端末内に保存され、次回はすぐ開けます（外部には送信されません）。</li>
           </ul>
         </div>
@@ -209,6 +212,7 @@
       <div class="row"><span>バージョン</span><b id="aboutVer"></b></div>
       <div class="row"><span>更新日</span><b id="aboutDate"></b></div>
       <div class="row"><span>対象シート</span><b>「直近」と「所要(調整)」より右のシート</b></div>
+      <div class="row"><span>在庫チェック</span><b>品番＋YYYYMM 列のシートを自動判定</b></div>
       <div class="row"><span>読み込み中のファイル</span><b id="aboutFile">—</b></div>
       <div class="row"><span>保存場所</span><b>この端末のブラウザ内 (IndexedDB)</b></div>
       <div class="row"><span>ライブラリ</span><b>JSZip (MIT)</b></div>
@@ -227,9 +231,9 @@
   </div><!-- /root -->
 
   <script src="vendor/jszip.min.js"></script>
-  <script src="js/numfmt.js?v=1.6.3"></script>
-  <script src="js/xlsx-lite.js?v=1.6.3"></script>
-  <script src="js/xlsx-write.js?v=1.6.3"></script>
-  <script src="js/app.js?v=1.6.3"></script>
+  <script src="js/numfmt.js?v=1.7.0"></script>
+  <script src="js/xlsx-lite.js?v=1.7.0"></script>
+  <script src="js/xlsx-write.js?v=1.7.0"></script>
+  <script src="js/app.js?v=1.7.0"></script>
 </body>
 </html>
