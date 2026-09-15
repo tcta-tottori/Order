@@ -1,13 +1,12 @@
 # GitHub Pages へ配信する。
-# Settings → Pages の Source が「GitHub Actions」のときはこのワークフローが公開を行う。
-# 「Deploy from a branch」のままだとこのジョブは失敗するので、その場合は Source を
-# 「GitHub Actions」に切り替えること。
+# github-pages 環境は Pages の配信元ブランチからのデプロイしか許可しないため、
+# トリガーは配信元ブランチだけにする（main から動かすと保護ルールで失敗する）。
+# 配信元ブランチを変えたら、下の branches も合わせて変えること。
 name: Deploy to GitHub Pages
 
 on:
   push:
     branches:
-      - main
       - claude/mobile-excel-sheet-viewer-xju6fi
   workflow_dispatch:
 
