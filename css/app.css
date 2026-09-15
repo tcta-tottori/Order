@@ -27,7 +27,7 @@
   --sar: env(safe-area-inset-right, 0px);
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
-  --app-css-ver: "1.8.1";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
+  --app-css-ver: "1.8.2";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 
@@ -565,6 +565,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .panel-scroll > .psec:first-child, .panel-scroll > .psec-row:first-child .psec { margin-top: 0; }
 .cf-status { flex: none; font-size: 11.5px; color: var(--ink-3); padding: 0 2px 6px; }
 .cf-status b { color: var(--green-dark); font-variant-numeric: tabular-nums; }
+.cf-status em { font-style: normal; color: var(--green-dark); }
 .panel.cf .cf-search { flex: none; height: 40px; margin-bottom: 8px; }
 .cf-tools { flex: none; display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .cf-tools .fchip { display: inline-flex; align-items: center; padding: 6px 11px; border-radius: 999px; font-size: 12.5px; font-weight: 600; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface-2); }

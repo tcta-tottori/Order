@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.1';
+  const APP_VERSION = '1.8.2';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -2125,7 +2125,7 @@
       min: cur && cur.min != null ? cur.min : '',
       max: cur && cur.max != null ? cur.max : '',
       grp: cur && cur.grp ? cur.grp : null,
-      q: '', picked: false,
+      q: '', picked: false, preQ: null,
     };
     $('cfGrp').hidden = !(m.gridConfig && m.gridConfig.kubunCol && c >= m.gridConfig.dayCol);
     $('cfTitle').textContent = `${title} のフィルター`;
@@ -2135,6 +2135,24 @@
     renderCfList();
     openPanel('cf', 'cfBg');
   }
+  /** いま検索に一致している値。検索していなければ全部。 */
+  function cfMatched(x) {
+    return x.q ? x.keys.filter((k) => k !== BLANK && k.toLowerCase().indexOf(x.q) >= 0) : x.keys;
+  }
+  /** 検索語が変わったとき、Excel と同じく「一致した値だけ」を対象にする。 */
+  function cfApplyQuery(x, q) {
+    if (q === x.q) return;
+    if (q) {
+      if (x.preQ === null || x.preQ === undefined) x.preQ = new Set(x.sel); // 検索前の選択を控えておく
+      x.q = q;
+      x.sel = new Set(cfMatched(x));   // 一致しない値はここで外れる
+    } else {
+      x.q = '';
+      if (x.preQ) { x.sel = x.preQ; x.preQ = null; }  // 検索をやめたら元に戻す
+    }
+    x.picked = false;
+  }
+
   function renderCfList() {
     const x = cfCtx;
     if (!x) return;
@@ -2142,8 +2160,7 @@
     for (const b of document.querySelectorAll('#cfGrp .fchip')) b.classList.toggle('on', b.dataset.grp === x.grp);
     const list = $('cfList');
     list.innerHTML = '';
-    const q = x.q;
-    const keys = q ? x.keys.filter((k) => k !== BLANK && k.toLowerCase().indexOf(q) >= 0) : x.keys;
+    const keys = cfMatched(x);
     const LIMIT = 400;
     keys.slice(0, LIMIT).forEach((k) => {
       const b = el('button', 'cf-item' + (x.sel.has(k) ? ' on' : '') + (k === BLANK ? ' blank' : ''));
@@ -2176,10 +2193,12 @@
     box.appendChild(document.createTextNode('選択 '));
     box.appendChild(el('b', null, String(n)));
     box.appendChild(document.createTextNode(` / ${all} 件` + (n === all ? '（すべて表示）' : '')));
+    if (x.q) box.appendChild(el('em', null, '　検索に一致した値だけが対象です'));
   }
   function applyColFilter() {
     const x = cfCtx;
     if (!x) return;
+    x.preQ = null;
     const min = $('cfMin').value.trim() === '' ? null : parseFloat($('cfMin').value);
     const max = $('cfMax').value.trim() === '' ? null : parseFloat($('cfMax').value);
     const allSelected = x.keys.every((k) => x.sel.has(k));
@@ -3223,16 +3242,15 @@
     $('cfClose').addEventListener('click', () => closePanel('cf', 'cfBg'));
     $('cfApply').addEventListener('click', applyColFilter);
     $('cfReset').addEventListener('click', () => { if (cfCtx) { setColFilter(cfCtx.m, cfCtx.c, null); closePanel('cf', 'cfBg'); render(); } });
-    $('cfAll').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.add(k); renderCfList(); });
-    $('cfNone').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; const q = cfCtx.q; for (const k of cfCtx.keys) if (!q || (k !== BLANK && k.toLowerCase().indexOf(q) >= 0)) cfCtx.sel.delete(k); renderCfList(); });
+    $('cfAll').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; cfCtx.preQ = null; for (const k of cfMatched(cfCtx)) cfCtx.sel.add(k); renderCfList(); });
+    $('cfNone').addEventListener('click', () => { if (!cfCtx) return; cfCtx.picked = true; cfCtx.preQ = null; for (const k of cfMatched(cfCtx)) cfCtx.sel.delete(k); renderCfList(); });
     $('cfNonEmpty').addEventListener('click', () => { if (!cfCtx) return; cfCtx.nonEmpty = !cfCtx.nonEmpty; renderCfList(); });
     let cfTimer = null;
     $('cfSearch').addEventListener('input', (e) => {
       clearTimeout(cfTimer);
       cfTimer = setTimeout(() => {
         if (!cfCtx) return;
-        const q = e.target.value.trim().toLowerCase();
-        if (q !== cfCtx.q) { cfCtx.q = q; cfCtx.picked = false; }
+        cfApplyQuery(cfCtx, e.target.value.trim().toLowerCase());
         renderCfList();
       }, 200);
     });
