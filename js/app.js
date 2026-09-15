@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.2';
+  const APP_VERSION = '1.9.0';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -2406,16 +2406,20 @@
         if (cst.font.strike) cls.push('strike');
         if (cfg && c === cfg.kubunCol) cls.push('kubun');
         if (cfg && r === m.headerRow && cfg.heads[c - 1] && cfg.heads[c - 1].serial === today) cls.push('today');
-        if (m.headerRow && (r === m.headerRow || (cfg && r === m.headerRow - 1 && c >= cfg.dayCol))) {
+        // 項目行（見出し）はグレーで統一し、全列にフィルターアイコンを出す（アイコンは CSS）
+        const isHead = !!m.headerRow && (r === m.headerRow || (cfg && r === m.headerRow - 1 && c >= cfg.dayCol));
+        if (isHead) {
           cls.push('fh');
-          if (cfActive[c]) { cls.push('filt'); const fi = el('i', 'fi'); fi.appendChild(svgUse('i-filter')); td.appendChild(fi); }
+          if (cfActive[c]) cls.push('filt');
+          // 細い列はアイコンが文字に被るので出さない（タップでの絞り込みはできる）
+          if (colWidthPx(c) < 52) cls.push('nofi');
         }
         if (state.query && text && matches(text)) cls.push('hit');
         if (cls.length) td.className = cls.join(' ');
         if (cst.font.size && cst.font.size !== 11 && !cfg) td.style.fontSize = (cst.font.size / 11) + 'em';
         if (cst.font.color && !isWhiteish(cst.font.color)) td.style.color = cst.font.color;
         else if (cst.font.color && cst.fill && luminance(cst.fill) < 0.5) td.style.color = cst.font.color;
-        if (state.opts.showFills && cst.fill && !(cfg && r === m.headerRow) && !dhead) {
+        if (state.opts.showFills && cst.fill && !isHead && !(cfg && r === m.headerRow) && !dhead) {
           td.style.background = cst.fill;
           if (luminance(cst.fill) < 0.45 && !cst.font.color) td.style.color = '#fff';
         }

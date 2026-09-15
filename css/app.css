@@ -27,7 +27,8 @@
   --sar: env(safe-area-inset-right, 0px);
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
-  --app-css-ver: "1.8.2";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
+  --head-bg: #e8ebe9;        /* 行・列の項目行（見出し）の地色 */
+  --app-css-ver: "1.9.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 
@@ -308,12 +309,13 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid td.key .kt { display: block; overflow: hidden; white-space: nowrap; }
 .grid:not(.expanded) td.key.cut .kt { -webkit-mask-image: linear-gradient(90deg, #000 76%, transparent 100%); mask-image: linear-gradient(90deg, #000 76%, transparent 100%); }
 .grid td.frozen-c, .grid th.frozen-c { background-clip: padding-box; }
-.grid td.dh1 { font-size: 1.02em; font-weight: 700; text-align: center; color: var(--green-deep); background: var(--green-light); }
+.grid td.dh1 { font-size: 1.02em; font-weight: 700; text-align: center; color: var(--ink); background-color: var(--head-bg); }
 .grid tr.hdr td.dh2 { text-align: center; font-size: .92em; }
 .grid td.dh1.sat, .grid tr.hdr td.dh2.sat { color: #1f5cd8; }
 .grid td.dh1.sun, .grid tr.hdr td.dh2.sun { color: var(--danger); }
-.grid td.dh1.today { background: var(--green); color: #fff; }
-.grid tr.hdr td.dh2.today { background: var(--green-mid); }
+.grid td.dh1.today { background-color: var(--green); color: #fff; }
+.grid tr.hdr td.dh2 { color: var(--ink-2); }
+.grid tr.hdr td.dh2.today { background-color: var(--green-mid); }
 
 /* filter bar above requirement tables */
 .fbar {
@@ -360,8 +362,8 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid td.hit { outline: 2px solid #ffb300; outline-offset: -2px; }
 .grid th { background: var(--surface-2); color: var(--ink-3); font-weight: 600; font-size: 11px; text-align: center; padding: 0 4px; }
 .grid th.rowhead { min-width: 34px; width: 34px; }
-.grid tr.hdr td { background: var(--green-light); color: var(--green-deep); font-weight: 700; }
-.grid tr.hdr td.today { background: var(--green-mid); }
+.grid tr.hdr td { background-color: var(--head-bg); color: var(--ink); font-weight: 700; }
+.grid tr.hdr td.today { background-color: var(--green-mid); color: var(--green-deep); }
 .grid .frozen-r { position: sticky; z-index: 3; }
 .grid .frozen-c { position: sticky; z-index: 2; }
 .grid .frozen-r.frozen-c { z-index: 4; }
@@ -545,10 +547,27 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid.sched .frozen-c { box-shadow: inset -2px 0 0 var(--line-2); }
 
 /* ---------- Excel-like column filter ---------- */
-.grid td.fh { cursor: pointer; }
-.grid td.fh.filt { background: var(--green-mid) !important; color: var(--green-deep); }
-.grid td.fh .fi { position: absolute; right: 2px; bottom: 2px; width: 12px; height: 12px; color: var(--green-deep); opacity: .9; }
-.grid td.fh .fi svg { width: 12px; height: 12px; }
+.grid td.fh {
+  cursor: pointer;
+  background-color: var(--head-bg);
+  color: var(--ink);
+  padding-right: 15px;
+  /* 全列に漏斗アイコン。押せば絞り込めることが見て分かるようにする */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='none' stroke='%237a857d' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 2px center;
+  background-size: 10px 10px;
+}
+.grid td.fh.filt {
+  background-color: var(--green-mid);
+  color: var(--green-deep);
+  font-weight: 800;
+  box-shadow: inset 0 -2px 0 var(--green);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='%23185c37' stroke='%23185c37' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.grid td.fh.today { background-color: var(--green-mid); }
+.grid td.fh.nofi { background-image: none; padding-right: 5px; }
+.grid td.fh.nofi.filt { box-shadow: inset 0 -2px 0 var(--green); }
 .panel.full {
   /* ふだんは画面の下寄り。キーボードが出たら上部を少しだけ残して広がる */
   top: auto;
