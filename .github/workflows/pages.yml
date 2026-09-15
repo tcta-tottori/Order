@@ -1,0 +1,36 @@
+# GitHub Pages へ配信する。
+# Settings → Pages の Source が「GitHub Actions」のときはこのワークフローが公開を行う。
+# 「Deploy from a branch」のままだとこのジョブは失敗するので、その場合は Source を
+# 「GitHub Actions」に切り替えること。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - claude/mobile-excel-sheet-viewer-xju6fi
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
