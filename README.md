@@ -1,5 +1,7 @@
 # Order View（発注ビューア）
 
+**公開 URL: https://tcta-tottori.github.io/Order/**
+
 Excel の発注ブック（`○○Ver.6.xlsm` など）や在庫一覧をスマートフォンの縦画面で見やすく表示する、インストール不要の Web アプリ（PWA）です。
 ファイルはスマホ内（iCloud Drive / Google ドライブ / ファイルアプリ等）から選択し、ブラウザ内だけで解析します。サーバーへの送信はありません。
 
