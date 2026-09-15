@@ -27,6 +27,7 @@
   --sar: env(safe-area-inset-right, 0px);
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
+  --app-css-ver: "1.8.1";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 
@@ -551,7 +552,7 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .panel.full {
   /* ふだんは画面の下寄り。キーボードが出たら上部を少しだけ残して広がる */
   top: auto;
-  height: min(80%, calc(100% - var(--kb, 0px) - var(--sat) - 44px));
+  height: var(--panel-h, 80%);   /* 実際の px は JS(syncKeyboardInset) が入れる */
   max-height: none;
   overflow: hidden; display: flex; flex-direction: column;
   transition: transform .22s cubic-bezier(.2,.8,.2,1), bottom .2s cubic-bezier(.2,.8,.2,1), height .2s cubic-bezier(.2,.8,.2,1);

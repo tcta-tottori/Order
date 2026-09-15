@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.0';
+  const APP_VERSION = '1.8.1';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
@@ -1128,6 +1128,12 @@
   let lastCheck = 0;
   let updateDismissed = false;
 
+  /** 読み込まれている app.css の版。HTML/JS と食い違えば古い CSS が残っている。 */
+  function loadedCssVersion() {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--app-css-ver');
+    return (v || '').trim().replace(/^["']|["']$/g, '');
+  }
+
   /** 公開中の index.html から版を読む。キャッシュを一切通さない。 */
   async function fetchLatestVersion() {
     const url = location.pathname.replace(/[^/]*$/, '') + 'index.html?ts=' + Date.now();
@@ -1154,23 +1160,30 @@
       renderAboutUpdate();
       return null;
     }
-    const stale = latestVer !== APP_VERSION;
-    if (stale && !updateDismissed) showUpdateBar(latestVer);
+    const cssVer = loadedCssVersion();
+    const cssStale = !!cssVer && cssVer !== APP_VERSION;
+    const stale = latestVer !== APP_VERSION || cssStale;
+    if (stale && !updateDismissed) showUpdateBar(cssStale ? APP_VERSION : latestVer, cssStale);
     else if (!stale) { $('updbar').hidden = true; if (manual) toast('最新版です（v' + APP_VERSION + '）'); }
     renderAboutUpdate();
     return latestVer;
   }
 
-  function showUpdateBar(v) {
-    $('updText').textContent = `新しいバージョン v${v} があります`;
+  function showUpdateBar(v, cssStale) {
+    $('updText').textContent = cssStale
+      ? '表示用のファイルが古いままです。更新してください'
+      : `新しいバージョン v${v} があります`;
     $('updbar').hidden = false;
   }
   function renderAboutUpdate() {
     const box = $('aboutLatest');
     if (!box) return;
     if (!latestVer) { box.textContent = '確認できません'; $('aboutUpdate').hidden = true; return; }
-    const stale = latestVer !== APP_VERSION;
-    box.textContent = stale ? `v${latestVer}（更新あり）` : `v${latestVer}（最新）`;
+    const cssVer = loadedCssVersion();
+    const cssStale = !!cssVer && cssVer !== APP_VERSION;
+    const stale = latestVer !== APP_VERSION || cssStale;
+    box.textContent = cssStale ? `v${latestVer}（表示用ファイルが v${cssVer} のまま）`
+      : latestVer !== APP_VERSION ? `v${latestVer}（更新あり）` : `v${latestVer}（最新）`;
     $('aboutUpdate').hidden = !stale;
   }
 
@@ -2138,8 +2151,11 @@
       b.appendChild(el('span', null, k === BLANK ? '(空白)' : k));
       b.appendChild(el('small', null, String(x.counts.get(k))));
       b.addEventListener('click', () => {
-        // 検索で絞り込んだ直後の 1 回目は「その値だけ」にする（初期状態は全選択のため）
-        if (x.q && !x.picked) { x.picked = true; x.sel.clear(); x.sel.add(k); renderCfList(); return; }
+        // 既定は全選択なので、最初の 1 タップは「その値だけ」にする。
+        // 検索してから選んだ 1 回目も同じ（2 回目以降は足し引きのトグル）。
+        if (!x.picked && (x.q || x.keys.every((k2) => x.sel.has(k2)))) {
+          x.picked = true; x.sel.clear(); x.sel.add(k); renderCfList(); return;
+        }
         if (x.sel.has(k)) x.sel.delete(k); else x.sel.add(k);
         b.classList.toggle('on');
         updateCfStatus();
@@ -2973,13 +2989,20 @@
 
   // ---------------------------------------------------------------- bottom panels
   /** ソフトキーボードが覆う高さを --kb に入れ、パネルがその上に収まるようにする。 */
+  const PANEL_TOP_GAP = 44;   // キーボードが出ているとき、上に残す高さ
+  const PANEL_RATIO = 0.8;    // キーボードがないときの画面に対する高さ
   function syncKeyboardInset() {
     const vv = window.visualViewport;
     const rotated = document.body.classList.contains('rot90') || document.body.classList.contains('rotm90');
     // 画面を CSS で回転しているときは軸が合わないので押し上げない
     let kb = 0;
     if (vv && !rotated) kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-    document.documentElement.style.setProperty('--kb', kb + 'px');
+    const root = document.documentElement;
+    root.style.setProperty('--kb', kb + 'px');
+    // 高さは JS で px にして渡す。min()/env() の対応差で宣言ごと無効になるのを避ける
+    const screenH = rotated ? window.innerWidth : window.innerHeight;
+    const h = Math.max(220, Math.min(Math.round(screenH * PANEL_RATIO), screenH - kb - PANEL_TOP_GAP));
+    root.style.setProperty('--panel-h', h + 'px');
   }
   function openPanel(id, bgId) {
     $(bgId).hidden = false; $(id).hidden = false;
