@@ -2,9 +2,10 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.0';
+  const APP_VERSION = '1.10.0';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
+  const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
   const LS_KEY = 'orderviewer:v2';
   const DB_NAME = 'orderviewer';
@@ -130,11 +131,16 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => t.classList.remove('show'), isErr ? 4200 : 2200);
   }
-  function overlay(show, msg, pct) {
+  function overlay(show, msg, pct, sub) {
     const o = $('overlay');
     o.hidden = !show;
     if (msg !== undefined) $('overlayMsg').textContent = msg;
-    if (pct !== undefined) $('overlayBar').style.width = pct + '%';
+    if (pct !== undefined) {
+      $('overlayBar').style.width = pct + '%';
+      $('overlayPct').textContent = Math.round(pct) + '%';
+    }
+    const sb = $('overlaySub');
+    if (sb) { sb.hidden = !sub; sb.textContent = sub || ''; }
   }
   const tick = () => new Promise((r) => setTimeout(r, 0));
   function fmtDateTime(ts) {
@@ -159,6 +165,7 @@
 
   // ---------------------------------------------------------------- target sheets
   function isTarget(idx, names) {
+    if (ALWAYS_RE.test(names[idx] || '')) return true;
     const iStart = names.indexOf(START_SHEET);
     const iEnd = names.indexOf(BOUNDARY_SHEET);
     if (idx === iStart) return true;
@@ -341,11 +348,12 @@
     return { dayCol, attr, keyCols, kubunCol: kubun ? kubun.c : 0, defaultShown, heads, ltCol: ltHead ? ltHead.c : 0 };
   }
 
-  async function getModel(sheetIndex) {
+  async function getModel(sheetIndex, onProgress) {
     let m = state.prepared.get(sheetIndex);
     if (m) return m;
-    const sheet = await state.book.loadSheet(sheetIndex);
+    const sheet = await state.book.loadSheet(sheetIndex, onProgress);
     if (!sheet) return null;
+    if (onProgress) { onProgress('表示の準備をしています', 88); await tick(); }
     m = makeModel(sheet, state.book.styles);
     m.headerRow = detectHeader(m);
     m.schedule = detectSchedule(m);
@@ -503,11 +511,21 @@
   async function selectSheet(idx, initial, paneNo) {
     if (paneNo === undefined) paneNo = state.active;
     let m = state.prepared.get(idx);
+    let loading = false;
     if (!m) {
-      overlay(true, `シート「${state.book.sheets[idx].name}」を読み込み中…`, initial ? 55 : 30);
+      const name = (state.book.sheets[idx] || {}).name || '';
+      loading = true;
+      overlay(true, `シート「${name}」を読み込み中`, 5, '準備しています');
       await tick();
-      try { m = await getModel(idx); } finally { if (!initial) overlay(false); }
-      if (!m) { toast('シートを読み込めませんでした', true); return; }
+      try {
+        m = await getModel(idx, (msg, pct) => overlay(true, `シート「${name}」を読み込み中`, pct, msg));
+      } catch (err) {
+        overlay(false);
+        console.error(err);
+        toast('シートを読み込めませんでした: ' + (err && err.message ? err.message : err), true);
+        return;
+      }
+      if (!m) { overlay(false); toast('シートを読み込めませんでした', true); return; }
     }
     const pn = state.panes[paneNo];
     pn.idx = idx;
@@ -521,7 +539,9 @@
     $('searchInput').value = '';
     $('searchBox').classList.remove('has');
     $('fabDot').hidden = true;
+    if (loading) { overlay(true, `シート「${m.sheet.name}」を読み込み中`, 96, '画面に表示しています'); await tick(); }
     render();
+    if (loading) { overlay(true, undefined, 100); if (!initial) overlay(false); }
   }
 
   function availableViews(m) {

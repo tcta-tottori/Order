@@ -28,7 +28,7 @@
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
   --head-bg: #e8ebe9;        /* 行・列の項目行（見出し）の地色 */
-  --app-css-ver: "1.9.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
+  --app-css-ver: "1.10.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 
@@ -868,3 +868,5 @@ body.land .stock-title { grid-column: 1 / -1; }
 .smhead b { font-size: 1.06em; font-weight: 800; color: var(--green-deep); }
 .smhead span { font-size: .78em; color: var(--ink-3); }
 body.land .smhead { grid-column: 1 / -1; }
+.overlay .sub { font-size: 12.5px; color: var(--ink-3); text-align: center; margin-top: -6px; }
+.overlay .pct { font-size: 12px; font-weight: 700; color: var(--green-dark); font-variant-numeric: tabular-nums; margin-top: -8px; }

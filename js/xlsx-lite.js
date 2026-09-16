@@ -463,13 +463,20 @@
     const ctx = { sst, theme, styles };
     const cache = new Map();
 
-    async function loadSheet(index) {
+    async function loadSheet(index, onProgress) {
       if (cache.has(index)) return cache.get(index);
       const meta = sheetsMeta[index];
       if (!meta || !meta.path) return null;
+      const step = (msg, pct) => { if (onProgress) onProgress(msg, pct); };
+      const breathe = () => new Promise((r) => setTimeout(r, 0)); // 進捗を描画させる
+      step('シートを取り出しています', 12);
+      await breathe();
       const xml = await readText(zip, meta.path);
       if (!xml) return null;
+      step('セルを読み取っています', 45);
+      await breathe();
       const sheet = parseSheet(xml, ctx);
+      step('書式を反映しています', 80);
       sheet.name = meta.name;
       sheet.index = meta.index;
       cache.set(index, sheet);
