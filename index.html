@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja" data-ver="1.12.0">
+<html lang="ja" data-ver="1.13.0">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
-  <link rel="stylesheet" href="css/app.css?v=1.12.0" />
+  <link rel="stylesheet" href="css/app.css?v=1.13.0" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -298,6 +298,7 @@
       <div class="row"><span>バージョン</span><b id="aboutVer"></b></div>
       <div class="row"><span>更新日</span><b id="aboutDate"></b></div>
       <div class="row"><span>公開中の最新版</span><b id="aboutLatest">確認中…</b></div>
+      <div class="row"><span>動作形態</span><b id="aboutMode">—</b></div>
       <div class="row"><span>対象シート</span><b>「直近」「在庫警告」と「所要(調整)」より右のシート</b></div>
       <div class="row"><span>在庫チェック</span><b>品番＋YYYYMM 列のシートを自動判定</b></div>
       <div class="row"><span>読み込み中のファイル</span><b id="aboutFile">—</b></div>
@@ -306,9 +307,10 @@
       <div class="about-act">
         <button class="secbtn2" id="aboutCheck">更新を確認</button>
         <button class="secbtn2 primary" id="aboutUpdate" hidden>今すぐ最新版にする</button>
+        <button class="secbtn2" id="aboutRelease">配布ページを開く</button>
       </div>
       <p class="fine">Excel ファイルはこの端末のブラウザ内だけで解析され、外部には送信されません。数式は Excel が保存した計算結果を表示します。</p>
-      <p class="fine">「今すぐ最新版にする」はアプリのキャッシュを消して読み込み直します。取り込んだファイルと変更内容は消えません。</p>
+      <p class="fine" id="aboutFineUpd">「今すぐ最新版にする」はアプリのキャッシュを消して読み込み直します。取り込んだファイルと変更内容は消えません。</p>
     </div>
   </div>
 
@@ -325,9 +327,9 @@
   </div><!-- /root -->
 
   <script src="vendor/jszip.min.js"></script>
-  <script src="js/numfmt.js?v=1.12.0"></script>
-  <script src="js/xlsx-lite.js?v=1.12.0"></script>
-  <script src="js/xlsx-write.js?v=1.12.0"></script>
-  <script src="js/app.js?v=1.12.0"></script>
+  <script src="js/numfmt.js?v=1.13.0"></script>
+  <script src="js/xlsx-lite.js?v=1.13.0"></script>
+  <script src="js/xlsx-write.js?v=1.13.0"></script>
+  <script src="js/app.js?v=1.13.0"></script>
 </body>
 </html>

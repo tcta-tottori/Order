@@ -2,14 +2,22 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.12.0';
-  const APP_DATE = '2026-09-14';
+  const APP_VERSION = '1.13.0';
+  const APP_DATE = '2026-09-17';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
   const BOUNDARY_SHEET = '所要(調整)'; // sheets to the right of this are targets
   const LS_KEY = 'orderviewer:v2';
   const DB_NAME = 'orderviewer';
   const DB_STORE = 'files';
+
+  // ---------------------------------------------------------------- Android アプリ版
+  // APK に組み込んで動かしているときだけ window.AndroidApp が生える。
+  // Web ブラウザで開いたときは null のままで、以降の分岐はすべて従来どおりになる。
+  const NATIVE = (window.AndroidApp && typeof window.AndroidApp.appVersion === 'function')
+    ? window.AndroidApp : null;
+  const RELEASE_PAGE = 'https://github.com/tcta-tottori/Order/releases/latest';
+  const RELEASE_API = 'https://api.github.com/repos/tcta-tottori/Order/releases/latest';
 
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => {
@@ -490,7 +498,7 @@
   }
   function renderDrawer() {
     $('drawerFile').textContent = state.fileMeta ? state.fileMeta.name : '';
-    $('drawerVer').textContent = 'Ver ' + APP_VERSION;
+    $('drawerVer').textContent = 'Ver ' + APP_VERSION + (NATIVE ? '（アプリ版）' : '');
     const nEd = editCount();
     const cn = $('drawerChangesN');
     cn.textContent = `${nEd}件`;
@@ -1115,6 +1123,10 @@
       const blob = await buildChangesXlsx(items);
       overlay(false);
       const file = new File([blob], fname, { type: blob.type });
+      if (NATIVE) {
+        await nativeDeliver(blob, fname, mode, subject, body);
+        return;
+      }
       if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: subject, text: body });
         return;
@@ -1163,6 +1175,32 @@
     }
   }
 
+  // ------------------------------------------------------- アプリ版のファイル受け渡し
+  // WebView には blob: を保存する仕組みがないので、作ったファイルは Android 側へ渡す。
+  // 発注ブックは数 MB になることがあるため、まとめてではなく小分けにして送る。
+  const NATIVE_CHUNK = 192 * 1024;
+
+  function base64Of(part) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(',')[1] || '');
+      fr.onerror = () => rej(fr.error || new Error('読み取りに失敗しました'));
+      fr.readAsDataURL(part);
+    });
+  }
+
+  /** ブラウザでいう「保存」「共有」をアプリ版で行う。mode は 'share' かそれ以外。 */
+  async function nativeDeliver(blob, fname, mode, subject, text) {
+    const token = NATIVE.beginFile(fname);
+    if (!token) throw new Error('保存先を用意できませんでした');
+    for (let off = 0; off < blob.size; off += NATIVE_CHUNK) {
+      const b64 = await base64Of(blob.slice(off, Math.min(off + NATIVE_CHUNK, blob.size)));
+      if (NATIVE.writeChunk(token, b64) === false) throw new Error('書き出しに失敗しました');
+    }
+    NATIVE.finishFile(token, blob.type || 'application/octet-stream',
+      mode === 'share', subject || '', text || '');
+  }
+
   // ---------------------------------------------------------------- 更新チェック
   let latestVer = null;      // 公開されている版（index.html の data-ver）
   let lastCheck = 0;
@@ -1176,6 +1214,17 @@
 
   /** 公開中の index.html から版を読む。キャッシュを一切通さない。 */
   async function fetchLatestVersion() {
+    if (NATIVE) {
+      // アプリ版は GitHub の最新リリース (タグ v1.2.3) を版とみなす
+      const res = await fetch(RELEASE_API + '?ts=' + Date.now(), {
+        cache: 'no-store', headers: { Accept: 'application/vnd.github+json' },
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
+      const tag = String(j && j.tag_name || '').replace(/^v/i, '').trim();
+      if (!tag) throw new Error('版を判定できません');
+      return tag;
+    }
     const url = location.pathname.replace(/[^/]*$/, '') + 'index.html?ts=' + Date.now();
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1189,7 +1238,7 @@
     const now = Date.now();
     if (!manual && now - lastCheck < 60000) return latestVer;
     lastCheck = now;
-    if ('serviceWorker' in navigator) {
+    if (!NATIVE && 'serviceWorker' in navigator) {
       try { for (const r of await navigator.serviceWorker.getRegistrations()) r.update(); } catch (e) { /* ignore */ }
     }
     try {
@@ -1201,7 +1250,7 @@
       return null;
     }
     const cssVer = loadedCssVersion();
-    const cssStale = !!cssVer && cssVer !== APP_VERSION;
+    const cssStale = !NATIVE && !!cssVer && cssVer !== APP_VERSION;
     const stale = latestVer !== APP_VERSION || cssStale;
     if (stale && !updateDismissed) showUpdateBar(cssStale ? APP_VERSION : latestVer, cssStale);
     else if (!stale) { $('updbar').hidden = true; if (manual) toast('最新版です（v' + APP_VERSION + '）'); }
@@ -1212,7 +1261,8 @@
   function showUpdateBar(v, cssStale) {
     $('updText').textContent = cssStale
       ? '表示用のファイルが古いままです。更新してください'
-      : `新しいバージョン v${v} があります`;
+      : NATIVE ? `新しいバージョン v${v} が出ています` : `新しいバージョン v${v} があります`;
+    $('updNow').textContent = NATIVE ? '入手' : '更新';
     $('updbar').hidden = false;
   }
   function renderAboutUpdate() {
@@ -1220,15 +1270,27 @@
     if (!box) return;
     if (!latestVer) { box.textContent = '確認できません'; $('aboutUpdate').hidden = true; return; }
     const cssVer = loadedCssVersion();
-    const cssStale = !!cssVer && cssVer !== APP_VERSION;
+    const cssStale = !NATIVE && !!cssVer && cssVer !== APP_VERSION;
     const stale = latestVer !== APP_VERSION || cssStale;
     box.textContent = cssStale ? `v${latestVer}（表示用ファイルが v${cssVer} のまま）`
       : latestVer !== APP_VERSION ? `v${latestVer}（更新あり）` : `v${latestVer}（最新）`;
     $('aboutUpdate').hidden = !stale;
   }
 
+  /** 配布ページ (GitHub のリリース) を開く。アプリ版は端末のブラウザへ渡す。 */
+  function openReleasePage() {
+    if (NATIVE) { NATIVE.openUrl(RELEASE_PAGE); return; }
+    window.open(RELEASE_PAGE, '_blank', 'noopener');
+  }
+
   /** キャッシュと Service Worker を作り直して読み込み直す。保存したファイル・設定は消さない。 */
   async function applyUpdate() {
+    if (NATIVE) {
+      // アプリ版は中身を入れ替えられない。配布ページを開いて新しい APK を入れてもらう。
+      toast('配布ページを開きます。新しい APK を入れると上書き更新されます');
+      NATIVE.openUrl(RELEASE_PAGE);
+      return;
+    }
     overlay(true, '最新版に更新しています…', 20);
     try {
       if ('serviceWorker' in navigator) {
@@ -2042,6 +2104,10 @@
       const blob = await buildStocktakeXlsx(m, list, s);
       overlay(false);
       const f = new File([blob], fname, { type: blob.type });
+      if (NATIVE) {
+        await nativeDeliver(blob, fname, mode, subject, body);
+        return;
+      }
       if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [f] })) {
         await navigator.share({ files: [f], title: subject, text: body });
         return;
@@ -2359,6 +2425,10 @@
       const file = new File([blob], fname, { type: 'text/csv' });
       const subject = `【発注】取込フォーマット ${rows.length}件（${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}）`;
       const body = `取込フォーマット（発注明細情報）を ${rows.length} 件お送りします。\n合計数量: ${sNum(rows.reduce((a, x) => a + x.qty, 0))}\n\n※ 元のファイルは変更していません。Order View から送信。`;
+      if (NATIVE) {
+        await nativeDeliver(blob, fname, mode, subject, body);
+        return;
+      }
       if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: subject, text: body });
         return;
@@ -3461,12 +3531,19 @@
     const h = Math.max(220, Math.min(Math.round(screenH * PANEL_RATIO), screenH - kb - PANEL_TOP_GAP));
     root.style.setProperty('--panel-h', h + 'px');
   }
+  // 端末の「戻る」で上から順に畳めるよう、開いているものを積んでおく
+  const panelStack = [];
   function openPanel(id, bgId) {
     $(bgId).hidden = false; $(id).hidden = false;
+    const i = panelStack.findIndex((p) => p.id === id);
+    if (i >= 0) panelStack.splice(i, 1);
+    panelStack.push({ id, bgId });
     syncKeyboardInset();
     requestAnimationFrame(() => { $(bgId).classList.add('show'); $(id).classList.add('show'); });
   }
   function closePanel(id, bgId) {
+    const i = panelStack.findIndex((p) => p.id === id);
+    if (i >= 0) panelStack.splice(i, 1);
     const p = $(id);
     const focused = p.contains(document.activeElement) ? document.activeElement : null;
     if (focused && focused.blur) focused.blur(); // キーボードを閉じてから畳む
@@ -3637,6 +3714,7 @@
       closeDrawer();
       $('aboutVer').textContent = APP_VERSION;
       $('aboutDate').textContent = APP_DATE;
+      $('aboutMode').textContent = NATIVE ? 'Android アプリ版（APK・端末内で完結）' : 'ブラウザ版（Web）';
       $('aboutFile').textContent = state.fileMeta ? `${state.fileMeta.name}（${fmtBytes(state.fileMeta.size)}）` : '—';
       renderAboutUpdate();
       checkForUpdate(true);
@@ -3646,6 +3724,11 @@
     $('updHide').addEventListener('click', () => { updateDismissed = true; $('updbar').hidden = true; });
     $('aboutCheck').addEventListener('click', () => { $('aboutLatest').textContent = '確認中…'; updateDismissed = false; checkForUpdate(true); });
     $('aboutUpdate').addEventListener('click', applyUpdate);
+    $('aboutRelease').addEventListener('click', () => openReleasePage());
+    if (NATIVE) {
+      $('aboutUpdate').textContent = '新しい APK を入手';
+      $('aboutFineUpd').textContent = 'アプリ版は画面一式を端末内に持っています。更新は配布ページから新しい APK を入れるだけで、上書きインストールされます。取り込んだファイルと変更内容は消えません。';
+    }
     // 自動発注・CSV
     $('aoBg').addEventListener('click', () => closePanel('ao', 'aoBg'));
     $('aoClose').addEventListener('click', () => closePanel('ao', 'aoBg'));
@@ -3788,8 +3871,9 @@
     bind();
     renderTargetChips();
     syncSettings();
-    $('drawerVer').textContent = 'Ver ' + APP_VERSION;
+    $('drawerVer').textContent = 'Ver ' + APP_VERSION + (NATIVE ? '（アプリ版）' : '');
     $('drawerBrandVer').textContent = 'v' + APP_VERSION;
+    document.body.classList.toggle('native', !!NATIVE);
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
     document.body.classList.toggle('noblink', !state.opts.blink);
     applyOrientation();
@@ -3802,7 +3886,14 @@
       return;
     }
     sessionStorage.removeItem('ov-reloaded');
-    if ('serviceWorker' in navigator) {
+    if (NATIVE && 'serviceWorker' in navigator) {
+      // アプリ版は画面一式を APK に同梱している。キャッシュが古い版を返すのを防ぐため、
+      // 以前 Web 版で登録された Service Worker が残っていれば外しておく。
+      navigator.serviceWorker.getRegistrations()
+        .then((rs) => Promise.all(rs.map((r) => r.unregister().catch(() => null))))
+        .catch(() => {});
+      if (window.caches) caches.keys().then((ks) => ks.forEach((k) => caches.delete(k))).catch(() => {});
+    } else if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
       let hadController = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -3826,6 +3917,20 @@
     const rec = await refreshRecentButton();
     if (rec && state.opts.autoOpen) openRecent();
   }
+
+  // Android アプリ版の「戻る」から呼ぶ。開いているものがあれば畳んで true を返す。
+  window.OrderViewNative = {
+    back() {
+      if (panelStack.length) {
+        const top = panelStack[panelStack.length - 1];
+        closePanel(top.id, top.bgId);
+        return true;
+      }
+      const dr = $('drawer');
+      if (dr && dr.classList.contains('show')) { closeDrawer(); return true; }
+      return false;
+    },
+  };
 
   window.OrderViewer = { state, openFile, version: APP_VERSION, checkUpdate: checkForUpdate, applyUpdate, debug: { ltHiddenRows, addBusinessDays, todaySerial, sheetGroups, collectChanges, buildChangesXlsx } };
   init();

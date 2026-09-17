@@ -1,0 +1,99 @@
+plugins {
+  id 'com.android.application'
+}
+
+// 画面まわりの実体は Web アプリ側 (リポジトリ直下) が持っている。
+// 版番号もそちらの index.html を唯一の出どころにして、二重管理をしない。
+def repoRoot = rootProject.projectDir.parentFile
+def webVersionMatcher = new File(repoRoot, 'index.html').getText('UTF-8') =~ /data-ver="(\d+)\.(\d+)\.(\d+)"/
+if (!webVersionMatcher.find()) {
+  throw new GradleException('index.html から data-ver を読み取れません')
+}
+def webVersion = webVersionMatcher.group(1) + '.' + webVersionMatcher.group(2) + '.' + webVersionMatcher.group(3)
+def webVersionCode = webVersionMatcher.group(1).toInteger() * 10000 +
+    webVersionMatcher.group(2).toInteger() * 100 +
+    webVersionMatcher.group(3).toInteger()
+
+// Web アプリ一式を assets/www へ取り込む。これで APK 単体で完結し、通信なしで動く。
+def webAssetsDir = layout.buildDirectory.dir('webassets').get().asFile
+tasks.register('syncWebAssets', Sync) {
+  description = 'Web アプリ一式を APK の assets へ取り込む'
+  from(repoRoot) {
+    include 'index.html'
+    include 'favicon.ico'
+    include 'css/**'
+    include 'js/**'
+    include 'vendor/**'
+    include 'icons/**'
+  }
+  into new File(webAssetsDir, 'www')
+}
+
+android {
+  namespace 'jp.tcta.orderview'
+  compileSdk 34
+
+  defaultConfig {
+    applicationId 'jp.tcta.orderview'
+    minSdk 24
+    targetSdk 34
+    versionCode webVersionCode
+    versionName webVersion
+    resValue 'string', 'app_name', 'Order View'
+  }
+
+  sourceSets {
+    main {
+      assets.srcDirs += webAssetsDir
+    }
+  }
+
+  // 署名鍵は更新のたびに変わってはいけない (変わると上書きインストールできない)。
+  // 既定はリポジトリ同梱の鍵。GitHub Actions の Secrets が入っていればそちらを使う。
+  signingConfigs {
+    release {
+      storeFile file(System.getenv('OV_KEYSTORE') ?: 'keystore/orderview.jks')
+      storePassword System.getenv('OV_KEYSTORE_PASSWORD') ?: 'orderview'
+      keyAlias System.getenv('OV_KEY_ALIAS') ?: 'orderview'
+      keyPassword System.getenv('OV_KEY_PASSWORD') ?: 'orderview'
+    }
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled false
+      shrinkResources false
+      signingConfig signingConfigs.release
+    }
+    debug {
+      signingConfig signingConfigs.release
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+
+  buildFeatures {
+    buildConfig true
+  }
+
+  packaging {
+    resources.excludes += ['META-INF/*.kotlin_module']
+  }
+}
+
+// assets を作るタスクより先に取り込みを済ませる
+tasks.configureEach { t ->
+  if (t.name == 'preBuild'
+      || (t.name.startsWith('merge') && t.name.endsWith('Assets'))
+      || (t.name.startsWith('generate') && t.name.endsWith('Assets'))) {
+    t.dependsOn('syncWebAssets')
+  }
+}
+
+dependencies {
+  implementation 'androidx.webkit:webkit:1.12.1'
+  implementation 'androidx.core:core:1.13.1'
+}
