@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja" data-ver="1.11.0">
+<html lang="ja" data-ver="1.12.0">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
-  <link rel="stylesheet" href="css/app.css?v=1.11.0" />
+  <link rel="stylesheet" href="css/app.css?v=1.12.0" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -137,6 +137,8 @@
     </label>
     <div class="psec-row" id="filtHead" hidden><div class="psec">列フィルター<small class="psub">表の見出しセルをタップして設定</small></div><button class="linkbtn" id="filtClear">すべて解除</button></div>
     <div class="fpills" id="filtList" hidden></div>
+    <div class="psec-row" id="aoHead" hidden><div class="psec">発注<small class="psub">元マクロと同じ計算で発注数を出し、取込用の CSV を作ります</small></div></div>
+    <button class="bigbtn sm" id="aoOpen" hidden><svg><use href="#i-download"/></svg>自動発注・取込CSV</button>
     <div class="psec-row" id="warnHead" hidden><div class="psec">警告で絞り込む<small class="psub" id="warnDesc">O列の警告（▲・△）が付いた品番だけを表示します</small></div></div>
     <div class="cf-tools" id="warnSeg" hidden></div>
     <div class="psec-row" id="ltHead" hidden><div class="psec">発注L/T フィルター<small class="psub" id="ltDesc">発注L/T×2（営業日）以内に所要・発注がない品番を隠す</small></div><button class="switch" id="ltSw"></button></div>
@@ -252,6 +254,25 @@
     </div>
   </div>
 
+  <!-- bottom: auto order calculation -->
+  <div class="sheet-bg" id="aoBg" hidden></div>
+  <div class="panel full" id="ao" hidden>
+    <div class="grip"></div>
+    <div class="panel-title"><h2>自動発注・取込CSV</h2><button class="iconbtn" id="aoClose" aria-label="閉じる"><svg><use href="#i-x"/></svg></button></div>
+    <div class="panel-scroll">
+      <div class="ao-sheet" id="aoSub"></div>
+      <div class="rpt-sum" id="aoBody"></div>
+      <p class="fine">元の Excel ファイルは変更しません。計算した発注は表に反映され、「変更内容」で確認・取り消しできます。</p>
+      <p class="fine">CSV は元マクロの「取込フォーマット発行」と同じ並び（更新モード・連番・手配先・品番・生産完了予定日・発注日・数量・管轄部門・取込コード）です。</p>
+    </div>
+    <div class="cf-foot col">
+      <button class="cf-apply" id="aoRun">自動発注を計算する</button>
+      <button class="cf-apply" id="aoApply" hidden>表に反映</button>
+      <button class="cf-clear wide" id="aoCsv" hidden><svg><use href="#i-mail"/></svg>CSV を共有（メール添付）</button>
+      <button class="cf-clear wide" id="aoCsvSave" hidden><svg><use href="#i-download"/></svg>CSV を保存</button>
+    </div>
+  </div>
+
   <!-- bottom: stocktake report -->
   <div class="sheet-bg" id="rptBg" hidden></div>
   <div class="panel full" id="rpt" hidden>
@@ -304,9 +325,9 @@
   </div><!-- /root -->
 
   <script src="vendor/jszip.min.js"></script>
-  <script src="js/numfmt.js?v=1.11.0"></script>
-  <script src="js/xlsx-lite.js?v=1.11.0"></script>
-  <script src="js/xlsx-write.js?v=1.11.0"></script>
-  <script src="js/app.js?v=1.11.0"></script>
+  <script src="js/numfmt.js?v=1.12.0"></script>
+  <script src="js/xlsx-lite.js?v=1.12.0"></script>
+  <script src="js/xlsx-write.js?v=1.12.0"></script>
+  <script src="js/app.js?v=1.12.0"></script>
 </body>
 </html>

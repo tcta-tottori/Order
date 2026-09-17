@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.11.0';
+  const APP_VERSION = '1.12.0';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
@@ -2062,6 +2062,392 @@
     }
   }
 
+
+  // ---------------------------------------------------------------- 自動発注計算（元マクロ Module1 の移植）
+  // 元マクロの構成: 当日=S列 / 区分=R列 / 品番=A列 / 発注L/T=P列 / 最小生産ﾛｯﾄ=Q列 /
+  // 手配先=G列 / 管轄部門=E列。日付見出しは 2 行目、休日はその塗り色で判定する。
+  const AO_HOLIDAY = '#D9D9D9';   // COLOR_HOLIDAY_GRAY  (休日)
+  const AO_WORKSAT = '#E8E8E8';   // COLOR_WORKING_SAT_GRAY (稼働土曜だが納入日にしない)
+  const AO_PROTECT = ['#ADD8E6', '#FFC000', '#92D050', '#00B050']; // 手入力・確定などで守る色
+  const AO_DONE = '#D1B2E8';      // 発注済（紫）
+  const AO_DEFAULTS = {
+    '量産在庫目標': 300, '少量在庫目標': 20, '先行発注数量': 200, '少量判定閾値': 100,
+    '量産判定_最小所要日数': 4, '量産判定_最小総所要量': 200,
+    '量産発注_大口数量': 300, '量産発注_大口判定閾値': 300,
+    '非ハコ_発注開始営業日': 4, '発注_保護先頭日付列数': 1,
+    '発注_LT小_閾値': 4, '発注_LT小_発注範囲営業日': 12, '取込コード': 8033,
+  };
+
+  let aoSettings = null;
+  /** ブックの「設定」シート（B列=設定名, C列=設定値）を読む。無ければ既定値。 */
+  async function orderSettings() {
+    if (aoSettings) return aoSettings;
+    aoSettings = Object.assign({}, AO_DEFAULTS);
+    try {
+      const t = state.book && state.book.sheets.find((x) => x.name === '設定');
+      if (t) {
+        const sh = await state.book.loadSheet(t.index);
+        const mm = makeModel(sh, state.book.styles);
+        for (let r = 1; r <= sh.maxRow; r++) {
+          const k = mm.text(mm.cell(r, 2));
+          if (!k) continue;
+          const cl = mm.cell(r, 3);
+          if (!cl || cl.v === null || cl.v === undefined) continue;
+          const n = cl.t === 'n' ? cl.v : parseFloat(String(cl.v).replace(/,/g, ''));
+          aoSettings[k] = Number.isFinite(n) ? n : String(cl.v);
+        }
+      }
+    } catch (e) { console.warn('設定シートを読めませんでした', e); }
+    return aoSettings;
+  }
+  const aoNum = (st, key, def) => { const v = st[key]; return typeof v === 'number' && Number.isFinite(v) ? v : def; };
+  /** 発注L/T の生値（数字以外が混ざっていても数字だけ拾う）。 */
+  function rawLeadTime(v) {
+    if (typeof v === 'number') return v > 0 ? Math.round(v) : 0;
+    const d = String(v == null ? '' : v).replace(/[^0-9]/g, '');
+    return d ? parseInt(d, 10) : 0;
+  }
+  const ceilTo = (v, step) => (step > 0 ? Math.ceil(v / step) * step : Math.ceil(v));
+
+  /** このシートが「ハコ以外」の発注ルールで計算できるか。ハコ方式・早川は別ルーチンなので対象外。 */
+  function orderSheetKind(m, st) {
+    const n = m.sheet.name;
+    const list = String(st['ハコ方式シート'] || '大西コルク工業所,パット').split(',').map((x) => x.trim()).filter(Boolean);
+    if (/^ハコ/.test(n) || /パット/.test(n) || list.some((x) => n.indexOf(x) >= 0)) return 'hako';
+    const hy = String(st['早川_シート名'] || '早川商事').trim();
+    if (hy && n.indexOf(hy) >= 0) return 'hayakawa';
+    if (!(m.gridConfig && m.gridConfig.dayCol && m.gridConfig.kubunCol)) return 'none';
+    return 'normal';
+  }
+
+  /** 自動発注計算。書き込みはせず、発注すべきセルの一覧を返す。 */
+  function autoOrderCalc(m, st) {
+    const cfg = m.gridConfig;
+    const out = { orders: [], parts: 0, hit: 0, total: 0, cleared: [], reason: '' };
+    if (!cfg || !cfg.dayCol) { out.reason = 'この表は発注計算に対応していません'; return out; }
+    const s = m.sheet, dayCol = cfg.dayCol;
+    // 日付見出しの行（休日の塗り色が入っている行）
+    let dateRow = m.headerRow;
+    if (m.headerRow > 1 && m.serialOf(m.cell(m.headerRow - 1, dayCol + 1)) !== null) dateRow = m.headerRow - 1;
+
+    const serialAt = (c) => m.serialOf(m.cell(dateRow, c));
+    const fillAt = (c) => { const f = m.styleOf(m.cell(dateRow, c)).fill; return f ? f.toUpperCase() : ''; };
+    const isHoliday = (c) => fillAt(c) === AO_HOLIDAY;
+    const isWorkSat = (c) => { const sv = serialAt(c); return sv !== null && (Math.floor(sv) + 6) % 7 === 6 && !isHoliday(c); };
+    const isDeliveryWorkday = (c) => {
+      const f = fillAt(c);
+      if (f === AO_HOLIDAY || f === AO_WORKSAT) return false;
+      if (isWorkSat(c)) return false;
+      return serialAt(c) !== null;
+    };
+    const today = todaySerial();
+    /** 今日より後の納入営業日を n 日ぶん数えて、その列を返す。 */
+    const deliveryDayCol = (n) => {
+      let cnt = 0;
+      for (let c = dayCol; c <= s.maxCol; c++) {
+        const sv = serialAt(c);
+        if (sv === null || sv <= today) continue;
+        if (!isDeliveryWorkday(c)) continue;
+        if (++cnt === n) return c;
+      }
+      return 0;
+    };
+    const prevDeliveryDay = (c0) => { for (let c = c0 - 1; c >= dayCol; c--) if (isDeliveryWorkday(c)) return c; return dayCol - 1; };
+
+    const lastCol = s.maxCol;
+    const maxOrderCol = lastCol;
+    const procStart = dayCol + 1 + aoNum(st, '発注_保護先頭日付列数', 1);
+    const lotCol = (cfg.heads.find((h) => /最小生産|ﾛｯﾄ|ロット/.test(h.text)) || {}).c || 0;
+    const ltCol = cfg.ltCol;
+    const smallThresh = aoNum(st, '発注_LT小_閾値', 4);
+    const smallWin = aoNum(st, '発注_LT小_発注範囲営業日', 12);
+    const cfgMidStock = aoNum(st, '量産在庫目標', 300);
+    const cfgEndStock = aoNum(st, '少量在庫目標_' + s.name, aoNum(st, '少量在庫目標', 20));
+    const cfgPreOrder = aoNum(st, '先行発注数量', 200);
+    const cfgSmallThresh = aoNum(st, '少量判定閾値', 100);
+    const cfgMinDays = aoNum(st, '量産判定_最小所要日数', 4);
+    const cfgMinTotal = aoNum(st, '量産判定_最小総所要量', 200);
+    const cfgBigQty = aoNum(st, '量産発注_大口数量', 300);
+    const cfgBigThresh = aoNum(st, '量産発注_大口判定閾値', 300);
+    const lotFloor = aoNum(st, '最小ロット下限_' + s.name, 0);
+    const dayFloorQty = aoNum(st, '発注日下限数量_' + s.name, 0);
+
+    const num = (r, c) => { const cl = m.cell(r, c); if (!cl || cl.v === null || cl.v === undefined) return 0; return cl.t === 'n' ? cl.v : (parseFloat(String(cl.v).replace(/,/g, '')) || 0); };
+
+    for (const g of sheetGroups(m)) {
+      const reqRow = g.demandRow, orderRow = g.orderRow, stockRow = g.stockRow;
+      if (!reqRow || !orderRow || !stockRow) continue;
+      out.parts++;
+
+      let minLot = lotCol ? num(reqRow, lotCol) : 0;
+      if (!(minLot > 0)) minLot = 10;
+      if (lotFloor > 0 && minLot < lotFloor) minLot = lotFloor;
+
+      const lt = ltCol ? rawLeadTime((m.cell(reqRow, ltCol) || {}).v) : 0;
+      let partMin = deliveryDayCol(Math.max(lt, 1));
+      const upper = lt <= smallThresh ? lt + smallWin : lt * 3;
+      let partMax = deliveryDayCol(upper) || lastCol;
+      if (!partMin) continue;
+      if (partMax < partMin) partMax = partMin;
+      if (partMin < procStart) partMin = procStart;
+      if (partMax < partMin) partMax = partMin;
+
+      // STEP1: 発注行のクリア（守る色は残す）。元マクロと同じく作業用のコピー上で行う
+      const ord = new Map();
+      for (let c = dayCol; c <= lastCol; c++) ord.set(c, num(orderRow, c));
+      for (let c = procStart; c <= maxOrderCol && c <= lastCol; c++) {
+        const f = (m.styleOf(m.cell(orderRow, c)).fill || '').toUpperCase();
+        if (f === AO_DONE || AO_PROTECT.indexOf(f) >= 0) continue;   // 手入力・確定・発注済は残す
+        if (ord.get(c)) out.cleared.push({ r: orderRow, c, was: ord.get(c) });
+        ord.set(c, 0);
+      }
+
+      // STEP2: 発注窓の所要を集める（稼働土曜は前営業日に寄せる）
+      const byCol = new Map();
+      let totalReq = 0, nDays = 0;
+      for (let c = partMin; c <= partMax && c <= lastCol; c++) {
+        const v = num(reqRow, c);
+        if (!(v > 0)) continue;
+        nDays++; totalReq += v;
+        const dc = isWorkSat(c) ? prevDeliveryDay(c) : c;
+        byCol.set(dc, (byCol.get(dc) || 0) + v);
+      }
+      if (!byCol.size) continue;
+      const reqCols = Array.from(byCol.keys()).sort((a, b) => a - b);
+
+      const initialStock = num(stockRow, dayCol);
+      const isMass = nDays >= cfgMinDays && totalReq >= cfgMinTotal;
+      const targetStock = isMass ? cfgMidStock : cfgEndStock;
+
+      // 発注列 c に数量を足す（守る色のセルには書かない）
+      const put = (c, qty) => {
+        const f = (m.styleOf(m.cell(orderRow, c)).fill || '').toUpperCase();
+        if (AO_PROTECT.indexOf(f) >= 0) return;
+        ord.set(c, (ord.get(c) || 0) + qty);
+      };
+      // その列までの在庫をなぞる
+      const simTo = (toCol) => {
+        let v = initialStock;
+        for (let c = dayCol; c < toCol && c <= lastCol; c++) v += (ord.get(c) || 0) - num(reqRow, c);
+        return v;
+      };
+
+      for (let i = 0; i < reqCols.length; i++) {
+        const thisCol = reqCols[i], thisReq = byCol.get(thisCol);
+        const isFirst = i === 0, isLast = i === reqCols.length - 1;
+        let orderCol;
+        if (isMass && isFirst) orderCol = thisCol;
+        else { orderCol = prevDeliveryDay(thisCol); if (orderCol < partMin) orderCol = thisCol; }
+
+        const simStock = simTo(thisCol);
+        let needed = 0;
+
+        if (isMass) {
+          let guard = false;
+          if (!isLast) {
+            // 以降ずっと少量在庫目標を割らないなら発注しない
+            let s2 = simStock, lo = simStock - thisReq;
+            for (let c2 = thisCol; c2 <= partMax && c2 <= lastCol; c2++) {
+              s2 += (ord.get(c2) || 0) - num(reqRow, c2);
+              if (s2 < lo) lo = s2;
+            }
+            if (lo >= cfgEndStock) { needed = 0; guard = true; }
+          }
+          if (guard) { /* 発注不要 */ }
+          else if (isLast) {
+            const post = simStock - thisReq;
+            needed = post >= cfgEndStock ? 0 : cfgEndStock - post;
+          } else {
+            if (simStock - thisReq >= cfgEndStock) needed = 0;
+            else if (thisReq >= cfgBigThresh) needed = cfgBigQty;
+            else if (thisReq >= cfgSmallThresh) needed = cfgPreOrder;
+            else { needed = thisReq - simStock + cfgEndStock; if (needed < 0) needed = 0; }
+            const post = simStock + needed - thisReq;
+            if (post > targetStock) { needed = targetStock - (simStock - thisReq); if (needed < 0) needed = 0; }
+          }
+        } else {
+          needed = simStock >= thisReq ? 0 : thisReq - simStock;
+        }
+
+        if (needed <= 0) needed = 0;
+        else needed = ceilTo(needed, minLot);
+        if (needed > 0 && dayFloorQty > 0 && needed < dayFloorQty) needed = ceilTo(dayFloorQty, minLot);
+
+        // 量産の最終日で 100 以下なら前回の発注にまとめる
+        if (isMass && isLast && needed > 0 && needed <= 100 && i > 0) {
+          let pc = prevDeliveryDay(reqCols[i - 1]);
+          if (pc < partMin) pc = reqCols[i - 1];
+          put(pc, needed);
+          needed = 0;
+        }
+        if (needed > 0) put(orderCol, needed);
+      }
+
+      // 元の値と違う列だけを発注として返す
+      for (let c = procStart; c <= lastCol; c++) {
+        const before = num(orderRow, c), after = ord.get(c) || 0;
+        if (after === before) continue;
+        out.orders.push({
+          r: orderRow, c, qty: after, orig: before, key: g.key, name: g.name,
+          serial: serialAt(c), lot: minLot, lt,
+        });
+        if (after > 0) { out.hit++; out.total += after; }
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- 取込フォーマット（CSV）
+  // 元マクロ「取込フォーマット発行」と同じ並び: 実行シート A:N を CSV にする。
+  //   A=更新モード(0) C=連番 D=手配先コード E=品番 G=生産完了予定日 H=発注日(本日)
+  //   I=発注数量 M=管轄部門 N=取込コード （B,F,J,K,L は空欄）
+  function orderCsvRows(st) {
+    const rows = [];
+    const stamp = (() => { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())}`; })();
+    const code = aoNum(st || AO_DEFAULTS, '取込コード', 8033);
+    let seq = 0;
+    for (const [sheetName, cells] of Object.entries(state.edits || {})) {
+      const t = state.book && state.book.sheets.find((x) => x.name === sheetName);
+      const m = t ? state.prepared.get(t.index) : null;
+      if (!m || !m.gridConfig) continue;
+      const cfg = m.gridConfig;
+      const sup = (cfg.heads.find((h) => /^手配先$/.test(h.text)) || cfg.heads.find((h) => /手配先/.test(h.text) && !/名/.test(h.text)) || {}).c || 0;
+      const dept = (cfg.heads.find((h) => /^管轄部門$/.test(h.text)) || {}).c || 0;
+      const keyCol = cfg.keyCols[0];
+      for (const [ref, e] of Object.entries(cells)) {
+        const [r, c] = ref.split(',').map(Number);
+        if (!(e.v > 0)) continue;
+        if (cfg.kubunCol && !/発注/.test(m.text(m.cell(r, cfg.kubunCol)))) continue;
+        const hh = cfg.heads[c - 1];
+        const sv = hh ? hh.serial : null;
+        rows.push({
+          seq: ++seq,
+          sheet: sheetName,
+          sup: sup ? m.text(m.cell(r, sup)) : '',
+          key: keyCol ? m.text(m.cell(r, keyCol)) : '',
+          due: sv != null ? dateISO(sv).replace(/-/g, '/') : '',
+          day: stamp,
+          qty: e.v,
+          dept: dept ? m.text(m.cell(r, dept)) : '',
+          code,
+        });
+      }
+    }
+    rows.sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : a.key < b.key ? -1 : 1));
+    rows.forEach((x, i) => { x.seq = i + 1; });
+    return rows;
+  }
+  function buildOrderCsv(rows) {
+    const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const out = [];
+    for (const x of rows) {
+      // A..N（B,F,J,K,L は空欄）
+      out.push([0, '', x.seq, x.sup, x.key, '', x.due, x.day, x.qty, '', '', '', x.dept, x.code].map(esc).join(','));
+    }
+    return out.join('\r\n') + '\r\n';
+  }
+  async function shareOrderCsv(mode) {
+    const st = await orderSettings();
+    const rows = orderCsvRows(st);
+    if (!rows.length) { toast('出力する発注がありません', true); return; }
+    try {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      const fname = `発注明細情報_${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.csv`;
+      const text = buildOrderCsv(rows);
+      const blob = new Blob([text], { type: 'text/csv' });
+      const file = new File([blob], fname, { type: 'text/csv' });
+      const subject = `【発注】取込フォーマット ${rows.length}件（${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}）`;
+      const body = `取込フォーマット（発注明細情報）を ${rows.length} 件お送りします。\n合計数量: ${sNum(rows.reduce((a, x) => a + x.qty, 0))}\n\n※ 元のファイルは変更していません。Order View から送信。`;
+      if (mode === 'share' && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: subject, text: body });
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      toast(`CSV を保存しました（${rows.length}件）`);
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      console.error(err);
+      toast('CSV を作成できませんでした: ' + (err && err.message ? err.message : err), true);
+    }
+  }
+
+  // ---------------------------------------------------------------- 発注パネル
+  let aoCtx = null;
+  async function openOrderPanel() {
+    const m = state.prepared.get(state.sheetIdx);
+    if (!m) return;
+    overlay(true, '設定を読み込み中', 20, '発注ルールを取得しています');
+    const st = await orderSettings();
+    overlay(false);
+    aoCtx = { m, st, plan: null };
+    renderOrderPanel();
+    openPanel('ao', 'aoBg');
+  }
+  function renderOrderPanel() {
+    const { m, st, plan } = aoCtx;
+    const box = $('aoBody');
+    box.innerHTML = '';
+    const row = (k, v, cls) => { const d = el('div', 'r' + (cls ? ' ' + cls : '')); d.appendChild(el('span', null, k)); d.appendChild(el('b', null, v)); box.appendChild(d); };
+    const head = (t) => { const d = el('div', 'r head'); d.appendChild(el('span', null, t)); box.appendChild(d); };
+    const kind = orderSheetKind(m, st);
+    const ok = kind === 'normal';
+    $('aoSub').textContent = m.sheet.name;
+    head('発注ルール（設定シート）');
+    row('量産の在庫目標', sNum(aoNum(st, '量産在庫目標', 300)));
+    row('少量の在庫目標', sNum(aoNum(st, '少量在庫目標', 20)));
+    row('量産と見なす条件', `${sNum(aoNum(st, '量産判定_最小所要日数', 4))}日以上 かつ 総所要 ${sNum(aoNum(st, '量産判定_最小総所要量', 200))}以上`);
+    row('発注開始', `今日から ${sNum(aoNum(st, '非ハコ_発注開始営業日', 4))}営業日後`);
+    if (!ok) {
+      head('このシートは自動計算の対象外');
+      row('理由', kind === 'hako' ? 'ハコ方式のシートです（別の発注ルール）'
+        : kind === 'hayakawa' ? '早川商事のシートです（月次の別ルール）'
+        : '品番と日付の表ではありません');
+      row('できること', 'CSV 出力と数量の手入力は使えます');
+    }
+    else if (plan) {
+      head('計算結果');
+      row('対象の品番', `${plan.parts} 件`);
+      row('発注が必要', `${plan.hit} 件`, plan.hit ? 'warn' : '');
+      row('合計数量', sNum(plan.total));
+      if (plan.cleared.length) row('作り直した既存の発注', `${plan.cleared.length} 件`);
+    }
+    const nCsv = orderCsvRows(st).length;
+    head('取込フォーマット（CSV）');
+    row('出力できる発注', `${nCsv} 件`);
+    $('aoRun').hidden = !ok;
+    $('aoRun').textContent = plan ? 'もう一度계算する' : '自動発注を計算する';
+    $('aoApply').hidden = !plan || !plan.orders.length;
+    if (plan) $('aoApply').textContent = `${plan.orders.length}件を表に反映`;
+    $('aoCsv').hidden = nCsv === 0;
+    $('aoCsvSave').hidden = nCsv === 0;
+  }
+  function runOrderCalc() {
+    const { m, st } = aoCtx;
+    overlay(true, '自動発注を計算中', 30, m.sheet.name);
+    setTimeout(() => {
+      try {
+        aoCtx.plan = autoOrderCalc(m, st);
+        overlay(false);
+        if (aoCtx.plan.reason) toast(aoCtx.plan.reason, true);
+        else if (!aoCtx.plan.hit) toast('発注が必要な品番はありませんでした');
+        renderOrderPanel();
+      } catch (err) { overlay(false); console.error(err); toast('計算に失敗しました: ' + (err && err.message ? err.message : err), true); }
+    }, 30);
+  }
+  function applyOrderPlan() {
+    const { m, plan } = aoCtx;
+    if (!plan) return;
+    let n = 0;
+    for (const o of plan.orders) { setEdit(m, o.r, o.c, o.qty); n++; }
+    closePanel('ao', 'aoBg');
+    render();
+    toast(`${n}件を表に反映しました。内容は「変更内容」で確認できます`);
+  }
+
   const BLANK = '\u0000blank';
   function colFilters(m) { return state.colFilters[m.sheet.name] || {}; }
   function setColFilter(m, c, f) {
@@ -3118,7 +3504,7 @@
     $('viewSecLabel').textContent = state.split ? `表示方法（${state.active === 0 ? '上' : '下'}のペイン）` : '表示方法';
     const m = state.prepared.get(state.sheetIdx);
     if (m) { renderViewSeg(m); renderColsList(m); }
-    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; $('ltHead').hidden = true; $('warnHead').hidden = true; $('warnSeg').hidden = true; $('filtHead').hidden = true; $('filtList').hidden = true; }
+    else { $('viewSeg').innerHTML = ''; $('aoHead').hidden = true; $('aoOpen').hidden = true; $('colsHead').hidden = true; $('colsList').hidden = true; $('ltHead').hidden = true; $('warnHead').hidden = true; $('warnSeg').hidden = true; $('filtHead').hidden = true; $('filtList').hidden = true; }
   }
   function renderViewSeg(m) {
     const seg = $('viewSeg');
@@ -3185,6 +3571,9 @@
   function renderColsList(m) {
     renderFilterPills(m);
     renderWarnSeg(m);
+    const canOrder = !!(m.gridConfig && m.gridConfig.dayCol && m.gridConfig.kubunCol);
+    $('aoHead').hidden = !canOrder;
+    $('aoOpen').hidden = !canOrder;
     const cfg = m.gridConfig;
     const list = $('colsList');
     const ltShow = !!(cfg && cfg.ltCol) && (state.view === 'grid' || state.view === 'cards');
@@ -3257,6 +3646,15 @@
     $('updHide').addEventListener('click', () => { updateDismissed = true; $('updbar').hidden = true; });
     $('aboutCheck').addEventListener('click', () => { $('aboutLatest').textContent = '確認中…'; updateDismissed = false; checkForUpdate(true); });
     $('aboutUpdate').addEventListener('click', applyUpdate);
+    // 自動発注・CSV
+    $('aoBg').addEventListener('click', () => closePanel('ao', 'aoBg'));
+    $('aoClose').addEventListener('click', () => closePanel('ao', 'aoBg'));
+    $('aoRun').addEventListener('click', runOrderCalc);
+    $('aoApply').addEventListener('click', applyOrderPlan);
+    $('aoCsv').addEventListener('click', () => shareOrderCsv('share'));
+    $('aoCsvSave').addEventListener('click', () => shareOrderCsv('save'));
+    $('aoOpen').addEventListener('click', () => { closePanel('viewMenu', 'viewMenuBg'); setTimeout(openOrderPanel, 240); });
+
     // 実棚入力
     $('cntBg').addEventListener('click', () => closePanel('cnt', 'cntBg'));
     $('cntClose').addEventListener('click', () => closePanel('cnt', 'cntBg'));
