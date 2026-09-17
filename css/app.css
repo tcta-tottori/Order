@@ -28,7 +28,7 @@
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
   --head-bg: #e8ebe9;        /* 行・列の項目行（見出し）の地色 */
-  --app-css-ver: "1.10.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
+  --app-css-ver: "1.11.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 
@@ -547,27 +547,46 @@ body.rot90, body.rotm90 { --sat: 0px; --sab: 0px; --sal: 0px; --sar: 0px; }
 .grid.sched .frozen-c { box-shadow: inset -2px 0 0 var(--line-2); }
 
 /* ---------- Excel-like column filter ---------- */
-.grid td.fh {
-  cursor: pointer;
-  background-color: var(--head-bg);
-  color: var(--ink);
-  padding-right: 15px;
-  /* 全列に漏斗アイコン。押せば絞り込めることが見て分かるようにする */
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='none' stroke='%237a857d' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 2px center;
-  background-size: 10px 10px;
+.grid td.fh { cursor: pointer; background-color: var(--head-bg); color: var(--ink); }
+/* sticky でない見出しセルだけ位置の基準にする（sticky を打ち消さないため） */
+.grid td.fh:not(.frozen-r):not(.frozen-c) { position: relative; }
+/* 漏斗は文字幅を取らないよう、上のレイヤーに半透明のバッジとして重ねる */
+.grid td.fh::after {
+  content: ''; position: absolute; right: 1px; top: 1px;
+  width: 12px; height: 12px; border-radius: 3px;
+  background-color: rgba(255, 255, 255, .55);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='none' stroke='%235a655d' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: center; background-size: 10px 10px;
+  opacity: .7; pointer-events: none; z-index: 5;
 }
 .grid td.fh.filt {
   background-color: var(--green-mid);
   color: var(--green-deep);
   font-weight: 800;
   box-shadow: inset 0 -2px 0 var(--green);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='%23185c37' stroke='%23185c37' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.grid td.fh.filt::after {
+  opacity: .95;
+  background-color: rgba(255, 255, 255, .8);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.8 3h12.4l-4.8 6v4.2L6.6 14.4V9z' fill='%23185c37' stroke='%23185c37' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 .grid td.fh.today { background-color: var(--green-mid); }
-.grid td.fh.nofi { background-image: none; padding-right: 5px; }
-.grid td.fh.nofi.filt { box-shadow: inset 0 -2px 0 var(--green); }
+
+/* 警告（O列）: △ は黄色、▲ は赤で、品番の 3 行（所要・発注・在庫）をまとめて点滅させる */
+@keyframes warnY { 0%, 100% { background-color: #fff7cc; } 50% { background-color: #ffe066; } }
+@keyframes warnR { 0%, 100% { background-color: #ffdedb; } 50% { background-color: #ff9c92; } }
+.grid tr.warn-y > td { animation: warnY 1.2s ease-in-out infinite; }
+.grid tr.warn-r > td { animation: warnR 1.2s ease-in-out infinite; }
+.grid tr.warn-y > th, .grid tr.warn-r > th { box-shadow: inset 3px 0 0 #e8a800; }
+.grid tr.warn-r > th { box-shadow: inset 3px 0 0 var(--danger); }
+body.noblink .grid tr.warn-y > td { animation: none; background-color: #fff2b8; }
+body.noblink .grid tr.warn-r > td { animation: none; background-color: #ffcdc7; }
+@media (prefers-reduced-motion: reduce) {
+  .grid tr.warn-y > td { animation: none; background-color: #fff2b8; }
+  .grid tr.warn-r > td { animation: none; background-color: #ffcdc7; }
+}
+#warnSeg .fchip.w-y.on { background: #ffe066; border-color: #e8a800; color: #6b4e00; }
+#warnSeg .fchip.w-r.on { background: #ff9c92; border-color: var(--danger); color: #6b1410; }
 .panel.full {
   /* ふだんは画面の下寄り。キーボードが出たら上部を少しだけ残して広がる */
   top: auto;

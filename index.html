@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja" data-ver="1.10.0">
+<html lang="ja" data-ver="1.11.0">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
@@ -15,7 +15,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180.png" />
-  <link rel="stylesheet" href="css/app.css?v=1.10.0" />
+  <link rel="stylesheet" href="css/app.css?v=1.11.0" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -137,6 +137,8 @@
     </label>
     <div class="psec-row" id="filtHead" hidden><div class="psec">列フィルター<small class="psub">表の見出しセルをタップして設定</small></div><button class="linkbtn" id="filtClear">すべて解除</button></div>
     <div class="fpills" id="filtList" hidden></div>
+    <div class="psec-row" id="warnHead" hidden><div class="psec">警告で絞り込む<small class="psub" id="warnDesc">O列の警告（▲・△）が付いた品番だけを表示します</small></div></div>
+    <div class="cf-tools" id="warnSeg" hidden></div>
     <div class="psec-row" id="ltHead" hidden><div class="psec">発注L/T フィルター<small class="psub" id="ltDesc">発注L/T×2（営業日）以内に所要・発注がない品番を隠す</small></div><button class="switch" id="ltSw"></button></div>
     <div class="psec-row" id="colsHead" hidden><div class="psec">表の列（表示/非表示）</div><button class="linkbtn" id="colsReset">初期状態に戻す</button></div>
     <div class="collist" id="colsList" hidden></div>
@@ -154,6 +156,7 @@
     <div class="opt"><div class="l">空の列を隠す<small>表で値のない列を省きます</small></div><button class="switch" data-opt="hideEmptyCols"></button></div>
     <div class="opt"><div class="l">行番号・列記号を表示<small>表で Excel と同じ位置がわかります</small></div><button class="switch" data-opt="showHeaders"></button></div>
     <div class="opt"><div class="l">セルの色を表示<small>Excel の塗りつぶし色を反映します</small></div><button class="switch" data-opt="showFills"></button></div>
+    <div class="opt"><div class="l">警告を点滅させる<small>▲・△ が付いた品番の 3 行を赤・黄で点滅表示します</small></div><button class="switch" data-opt="blink"></button></div>
     <div class="opt"><div class="l">対象外のシートも表示<small>設定・在庫警告・所要など全シートをメニューに出します</small></div><button class="switch" data-opt="allSheets"></button></div>
     <div class="opt"><div class="l">起動時に前回のファイルを開く</div><button class="switch" data-opt="autoOpen"></button></div>
     <div class="opt col"><div class="l">画面の向き<small>「回転しない」は縦向きに固定します。横向き固定は横画面用の配置になります</small></div>
@@ -301,9 +304,9 @@
   </div><!-- /root -->
 
   <script src="vendor/jszip.min.js"></script>
-  <script src="js/numfmt.js?v=1.10.0"></script>
-  <script src="js/xlsx-lite.js?v=1.10.0"></script>
-  <script src="js/xlsx-write.js?v=1.10.0"></script>
-  <script src="js/app.js?v=1.10.0"></script>
+  <script src="js/numfmt.js?v=1.11.0"></script>
+  <script src="js/xlsx-lite.js?v=1.11.0"></script>
+  <script src="js/xlsx-write.js?v=1.11.0"></script>
+  <script src="js/app.js?v=1.11.0"></script>
 </body>
 </html>

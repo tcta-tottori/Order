@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.10.0';
+  const APP_VERSION = '1.11.0';
   const APP_DATE = '2026-09-14';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
@@ -23,7 +23,7 @@
   // ---------------------------------------------------------------- state
   const defaults = {
     hideEmptyRows: true, hideEmptyCols: true, showHeaders: false, showFills: true,
-    allSheets: false, autoOpen: true, fontScale: 1, ltFilter: true, orient: 'auto',
+    allSheets: false, autoOpen: true, fontScale: 1, ltFilter: true, orient: 'auto', blink: true,
   };
   const state = {
     opts: Object.assign({}, defaults),
@@ -43,6 +43,7 @@
     split: false,
     splitRatio: 0.5,
     splitNames: [null, null],
+    warnFilter: {},  // sheetName -> '' | 'any' | 'none' | '△' | '▲'
     colFilters: {}, // sheetName -> { col: { values: [..]|null, nonEmpty: bool, min: n|null, max: n|null, grp: 'order'|'demand'|null } }
     stockUi: {},    // sheetName -> { sort, f: { kubun: [..] }, unchecked, still, panel } (在庫ビュー)
     checks: {},     // fileName -> { sheetName -> { 品番: 確認した時刻 } }（v1.7 まで）
@@ -69,6 +70,7 @@
         state.splitRatio = p.splitRatio || 0.5;
         state.splitNames = p.splitNames || [null, null];
         state.colFilters = p.colFilters || {};
+        state.warnFilter = p.warnFilter || {};
         state.stockUi = p.stockUi || {};
         state.checks = p.checks || {};
         state.counts = p.counts || {};
@@ -79,7 +81,7 @@
   function savePrefs() {
     try {
       const names = state.panes.map((pn) => { const m = state.prepared.get(pn.idx); return m ? m.sheet.name : null; });
-      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, stockUi: state.stockUi, checks: state.checks, counts: state.counts, editsByFile: state.editsByFile }));
+      localStorage.setItem(LS_KEY, JSON.stringify({ opts: state.opts, views: state.views, colVis: state.colVis, lastSheet: state.lastSheet, split: state.split, splitRatio: state.splitRatio, splitNames: names, colFilters: state.colFilters, warnFilter: state.warnFilter, stockUi: state.stockUi, checks: state.checks, counts: state.counts, editsByFile: state.editsByFile }));
     } catch (e) { /* ignore */ }
   }
 
@@ -345,7 +347,22 @@
     const defaultShown = new Set(keyCols);
     if (kubun) defaultShown.add(kubun.c);
     const ltHead = heads.find((h) => /発注\s*L\s*\/?\s*T/i.test(h.text)) || heads.find((h) => /L\s*\/?\s*T/i.test(h.text));
-    return { dayCol, attr, keyCols, kubunCol: kubun ? kubun.c : 0, defaultShown, heads, ltCol: ltHead ? ltHead.c : 0 };
+    // 警告列: 見出しに「警告」があるか、値が △ ▲ などの記号だけの列
+    let warnCol = (attr.find((h) => /警告/.test(h.text)) || {}).c || 0;
+    if (!warnCol) {
+      for (const h of attr) {
+        let n = 0, mark = 0, bad = 0;
+        for (let r = hr + 1; r <= Math.min(hr + 300, s.maxRow); r++) {
+          const t = m.text(m.cell(r, h.c));
+          if (!t) continue;
+          n++;
+          if (/^[△▲]$/.test(t)) mark++;
+          else if (!/^[○●◎×✕－—\-]$/.test(t)) bad++;
+        }
+        if (n && mark > 0 && bad === 0) { warnCol = h.c; break; }
+      }
+    }
+    return { dayCol, attr, keyCols, kubunCol: kubun ? kubun.c : 0, defaultShown, heads, ltCol: ltHead ? ltHead.c : 0, warnCol };
   }
 
   async function getModel(sheetIndex, onProgress) {
@@ -772,6 +789,7 @@
         orderRow: rows.find((r) => /発注/.test(kb(r))) || null,
         ltRaw: cfg.ltCol ? num(m.cell(rows[0], cfg.ltCol)) : 0,
         lt: 0, ltSource: 'raw',
+        warn: cfg.warnCol ? (rows.map((r) => m.text(m.cell(r, cfg.warnCol))).find((t) => /^[△▲]$/.test(t)) || '') : '',
       };
       g.lt = g.ltRaw;
       groups.push(g);
@@ -1137,6 +1155,8 @@
       const cf = colFilters(m);
       const n = Object.keys(cf).length;
       if (n) add(`${n}列`, '', 'i-filter', `${n}列で絞り込み`);
+      const wf = m.gridConfig.warnCol ? (state.warnFilter[m.sheet.name] || '') : '';
+      if (wf) add(wf === 'any' ? '▲△' : wf === 'none' ? '警告なし' : wf, '', 'i-filter', '警告で絞り込み中');
       if (state.opts.ltFilter && m.gridConfig.ltCol) { const lt = ltHiddenRows(m); if (lt && lt.hiddenGroups) add(`L/T ${lt.hiddenGroups}`, '', 'i-filter', `発注L/T×2 で ${lt.hiddenGroups}品番を非表示`); }
       const ne = Object.keys(sheetEdits(m)).length;
       if (ne) add(`${ne}`, 'chg', 'i-edit', `変更 ${ne}件`);
@@ -2074,8 +2094,14 @@
     const lt = cfg && state.opts.ltFilter ? ltHiddenRows(m) : null;
     const cf = colFilters(m);
     const entries = Object.entries(cf).map(([c, f]) => [+c, f]).filter(([c]) => c !== skipCol);
+    const wf = cfg && cfg.warnCol ? (state.warnFilter[m.sheet.name] || '') : '';
     const pass = (r) => {
       if (lt && lt.hidden.has(r)) return false;
+      if (wf) {
+        const g = groupOfRow(m, r);
+        const w = g ? g.warn : '';
+        if (wf === 'any' ? !w : wf === 'none' ? !!w : w !== wf) return false;
+      }
       for (const [c, f] of entries) {
         if (f.grp) {
           const g = groupOfRow(m, r);
@@ -2089,7 +2115,7 @@
       }
       return true;
     };
-    return { pass, lt, active: !!(lt && lt.hiddenGroups) || entries.length > 0, nfilters: entries.length };
+    return { pass, lt, warn: wf, active: !!(lt && lt.hiddenGroups) || entries.length > 0 || !!wf, nfilters: entries.length };
   }
   function filterSummary(m, c, f) {
     let head = m.text(m.cell(m.headerRow, c)) || XlsxLite.indexToCol(c);
@@ -2349,6 +2375,10 @@
       const isFrozen = r <= freezeY;
       if (isFrozen) tr.className = 'frozen-r';
       if (cfg && r === m.headerRow) tr.classList.add('hdr');
+      if (cfg && cfg.warnCol && r > m.headerRow) {
+        const wg = groupOfRow(m, r);
+        if (wg && wg.warn) tr.classList.add(wg.warn === '▲' ? 'warn-r' : 'warn-y');
+      }
       const ht = s.rows[r] && s.rows[r].ht ? s.rows[r].ht : s.defaultRowHeight;
       const hpx = Math.max(20, Math.round(ht * 1.34));
       let fz = 0;
@@ -2431,8 +2461,6 @@
         if (isHead) {
           cls.push('fh');
           if (cfActive[c]) cls.push('filt');
-          // 細い列はアイコンが文字に被るので出さない（タップでの絞り込みはできる）
-          if (colWidthPx(c) < 52) cls.push('nofi');
         }
         if (state.query && text && matches(text)) cls.push('hit');
         if (cls.length) td.className = cls.join(' ');
@@ -3061,6 +3089,7 @@
   }
   function syncSettings() {
     for (const sw of document.querySelectorAll('.switch[data-opt]')) sw.classList.toggle('on', !!state.opts[sw.dataset.opt]);
+    document.body.classList.toggle('noblink', !state.opts.blink);
     $('fontVal').textContent = Math.round(state.opts.fontScale * 100) + '%';
     for (const b of document.querySelectorAll('#orientSeg button')) b.classList.toggle('on', b.dataset.orient === (state.opts.orient || 'auto'));
   }
@@ -3089,7 +3118,7 @@
     $('viewSecLabel').textContent = state.split ? `表示方法（${state.active === 0 ? '上' : '下'}のペイン）` : '表示方法';
     const m = state.prepared.get(state.sheetIdx);
     if (m) { renderViewSeg(m); renderColsList(m); }
-    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; $('ltHead').hidden = true; $('filtHead').hidden = true; $('filtList').hidden = true; }
+    else { $('viewSeg').innerHTML = ''; $('colsHead').hidden = true; $('colsList').hidden = true; $('ltHead').hidden = true; $('warnHead').hidden = true; $('warnSeg').hidden = true; $('filtHead').hidden = true; $('filtList').hidden = true; }
   }
   function renderViewSeg(m) {
     const seg = $('viewSeg');
@@ -3131,8 +3160,31 @@
     }
     if (!keys.length && m && m.headerRow) box.hidden = false, box.appendChild(el('span', 'psub', 'フィルターなし'));
   }
+  const WARN_OPTS = [['', 'すべて'], ['any', '▲と△'], ['▲', '▲ のみ'], ['△', '△ のみ'], ['none', '警告なし']];
+  function renderWarnSeg(m) {
+    const cfg = m.gridConfig;
+    const show = !!(cfg && cfg.warnCol) && (state.view === 'grid' || state.view === 'cards');
+    $('warnHead').hidden = !show;
+    $('warnSeg').hidden = !show;
+    if (!show) return;
+    const cur = state.warnFilter[m.sheet.name] || '';
+    const n = sheetGroups(m).reduce((a, g) => { if (g.warn === '▲') a.r++; else if (g.warn === '△') a.y++; return a; }, { r: 0, y: 0 });
+    $('warnDesc').textContent = `${m.text(m.cell(m.headerRow, cfg.warnCol)) || '警告'}（▲ ${n.r}品番 / △ ${n.y}品番）で絞り込みます`;
+    const seg = $('warnSeg');
+    seg.innerHTML = '';
+    for (const [v, label] of WARN_OPTS) {
+      const b = el('button', 'fchip' + (v === '▲' ? ' w-r' : v === '△' ? ' w-y' : '') + (cur === v ? ' on' : ''));
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        if (v) state.warnFilter[m.sheet.name] = v; else delete state.warnFilter[m.sheet.name];
+        savePrefs(); renderViewMenu(); render();
+      });
+      seg.appendChild(b);
+    }
+  }
   function renderColsList(m) {
     renderFilterPills(m);
+    renderWarnSeg(m);
     const cfg = m.gridConfig;
     const list = $('colsList');
     const ltShow = !!(cfg && cfg.ltCol) && (state.view === 'grid' || state.view === 'cards');
@@ -3341,6 +3393,7 @@
     $('drawerVer').textContent = 'Ver ' + APP_VERSION;
     $('drawerBrandVer').textContent = 'v' + APP_VERSION;
     document.documentElement.style.setProperty('--scale', state.opts.fontScale);
+    document.body.classList.toggle('noblink', !state.opts.blink);
     applyOrientation();
     syncKeyboardInset();
     // stale HTML + new JS (or the reverse) must never run together: reload once with a cache-busting URL
