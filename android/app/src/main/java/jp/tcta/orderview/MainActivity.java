@@ -29,16 +29,6 @@ public class MainActivity extends Activity {
   static final String START_URL = ORIGIN + "/assets/www/index.html";
   private static final int REQ_PICK_FILE = 4101;
 
-  /** 表として開けるもの。拡張子しか持たない端末もあるので広めに並べる。 */
-  private static final String[] PICK_MIME = {
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "application/vnd.ms-excel.sheet.macroEnabled.12",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
-      "application/vnd.ms-excel.template.macroEnabled.12",
-      "application/vnd.ms-excel",
-      "application/octet-stream",
-  };
-
   private WebView web;
   private ValueCallback<Uri[]> pendingPick;
 
@@ -85,10 +75,11 @@ public class MainActivity extends Activity {
       public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> cb, FileChooserParams params) {
         if (pendingPick != null) pendingPick.onReceiveValue(null);
         pendingPick = cb;
+        // 種類で絞り込まない。Google ドライブなどは .xlsm の種類の綴りが揃っておらず、
+        // 絞り込むと肝心の発注マクロが選べなくなる。開けない中身なら読み込み時に知らせる。
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         pick.addCategory(Intent.CATEGORY_OPENABLE);
         pick.setType("*/*");
-        pick.putExtra(Intent.EXTRA_MIME_TYPES, PICK_MIME);
         try {
           startActivityForResult(pick, REQ_PICK_FILE);
           return true;

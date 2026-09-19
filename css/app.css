@@ -28,7 +28,7 @@
   --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", "Segoe UI", Roboto, sans-serif;
   --scale: 1;
   --head-bg: #e8ebe9;        /* 行・列の項目行（見出し）の地色 */
-  --app-css-ver: "1.13.0";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
+  --app-css-ver: "1.13.1";   /* scripts/bump-version.py が書き換える。JS 側で古い CSS を検出するのに使う */
   color-scheme: light;
 }
 

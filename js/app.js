@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.13.0';
+  const APP_VERSION = '1.13.1';
   const APP_DATE = '2026-09-17';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
@@ -428,6 +428,12 @@
   async function openFile(file) {
     if (!file) return;
     if (/\.xls$/i.test(file.name)) { toast('旧形式 (.xls) は対応していません。.xlsx / .xlsm で保存してください。', true); return; }
+    // 選ぶ側では種類を絞らないので、開けない拡張子はここで理由を出して止める
+    const ext = (file.name.match(/\.([a-z0-9]+)$/i) || ['', ''])[1].toLowerCase();
+    if (ext && !['xlsx', 'xlsm', 'xltx', 'xltm'].includes(ext)) {
+      toast(`「${file.name}」は開けません。.xlsx / .xlsm のファイルを選んでください`, true);
+      return;
+    }
     overlay(true, 'ファイルを読み込み中…', 1);
     try {
       const buffer = await file.arrayBuffer();
