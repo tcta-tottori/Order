@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
   <cache-path name="share" path="share/" />
+  <!-- 選んだファイルをアプリ内へ写し取った控え（読み込み用） -->
+  <cache-path name="pick" path="pick/" />
 </paths>

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.13.2';
+  const APP_VERSION = '1.13.3';
   const APP_DATE = '2026-09-17';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
@@ -453,13 +453,31 @@
    * 読み方を変えて最大 3 回まで試し、大きさが合っているかも確かめる。
    */
   async function readFileBytes(file) {
+    // FileReader で読み、進み具合を出す。受信が STALL_MS 止まったら打ち切って読み直す
+    // （クラウド上のファイルはエラーにならず待ち続けることがあるため）。
+    const STALL_MS = 15000;
     const viaReader = () => new Promise((resolve, reject) => {
       const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = () => reject(fr.error || new Error('read error'));
+      let last = Date.now();
+      const dog = setInterval(() => {
+        if (Date.now() - last > STALL_MS) { clearInterval(dog); try { fr.abort(); } catch (e) { /* ignore */ } reject(new Error('受信が止まりました')); }
+      }, 1000);
+      fr.onprogress = (e) => {
+        last = Date.now();
+        const total = e.lengthComputable ? e.total : file.size;
+        if (total) overlay(true, 'ファイルを読み込み中…', Math.min(3, 1 + (2 * e.loaded) / total), `${fmtBytes(e.loaded)} / ${fmtBytes(total)}`);
+      };
+      fr.onload = () => { clearInterval(dog); resolve(fr.result); };
+      fr.onerror = () => { clearInterval(dog); reject(fr.error || new Error('read error')); };
+      fr.onabort = () => { clearInterval(dog); reject(new Error('受信が止まりました')); };
       fr.readAsArrayBuffer(file);
     });
-    const ways = [() => file.arrayBuffer(), viaReader, () => file.arrayBuffer()];
+    // 1 回目は速い arrayBuffer。時間内に終わらなければ、進み具合を見張れる FileReader に切り替える。
+    const viaBuffer = () => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('受信が止まりました')), STALL_MS);
+      file.arrayBuffer().then((b) => { clearTimeout(timer); resolve(b); }, (e) => { clearTimeout(timer); reject(e); });
+    });
+    const ways = [viaBuffer, viaReader, viaReader];
     let lastErr = null;
     let best = null; // 大きさが申告と違っても、いちばん多く読めたものは最後の手段として残す
     for (let i = 0; i < ways.length; i++) {
@@ -472,7 +490,7 @@
       } catch (e) {
         lastErr = e;
         console.warn('read attempt failed', i + 1, e);
-        if (i < ways.length - 1) { overlay(true, 'ファイルを読み直しています…', 1); await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
+        if (i < ways.length - 1) { overlay(true, `ファイルを読み直しています（${i + 2}回目）…`, 1); await new Promise((r) => setTimeout(r, 500 * (i + 1))); }
       }
     }
     if (best) return best; // 中身が壊れていれば展開時に分かりやすく知らせる
@@ -3961,6 +3979,15 @@
 
   // Android アプリ版の「戻る」から呼ぶ。開いているものがあれば畳んで true を返す。
   window.OrderViewNative = {
+    /** アプリ版: 選んだファイルをアプリ内へ写し取っている間の進み具合（MainActivity から呼ぶ）。 */
+    pickProgress(phase, done, total, attempt) {
+      const size = total > 0 ? ` / ${fmtBytes(total)}` : '';
+      const again = attempt > 1 ? `（${attempt}回目）` : '';
+      if (phase === 'start') overlay(true, 'ファイルを受け取り中…', 0, 'クラウドのファイルは端末へのダウンロードを待っています');
+      else if (phase === 'copy') overlay(true, 'ファイルを受け取り中…' + again, total > 0 ? Math.min(99, (100 * done) / total) : 0, `${fmtBytes(done)}${size}`);
+      else if (phase === 'retry') overlay(true, `受信が止まったので、つなぎ直しています${again}`, 0, '電波の良い場所だと早く終わります');
+      else if (phase === 'fail') overlay(false);
+    },
     back() {
       if (panelStack.length) {
         const top = panelStack[panelStack.length - 1];

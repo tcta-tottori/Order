@@ -3,8 +3,12 @@ package jp.tcta.orderview;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.OpenableColumns;
 import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -16,7 +20,16 @@ import android.widget.Toast;
 
 import android.webkit.WebViewClient;
 
+import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Web アプリ一式 (assets/www) をそのまま抱えた WebView。
@@ -29,8 +42,14 @@ public class MainActivity extends Activity {
   static final String START_URL = ORIGIN + "/assets/www/index.html";
   private static final int REQ_PICK_FILE = 4101;
 
+  /** 受信が止まったと見なすまでの時間。過ぎたらつなぎ直す。 */
+  private static final long STALL_MS = 20000;
+  private static final int MAX_TRIES = 3;
+
   private WebView web;
   private ValueCallback<Uri[]> pendingPick;
+  private final Handler ui = new Handler(Looper.getMainLooper());
+  private volatile int copyGen = 0;
 
   @Override
   protected void onCreate(Bundle saved) {
@@ -123,9 +142,147 @@ public class MainActivity extends Activity {
     ValueCallback<Uri[]> cb = pendingPick;
     pendingPick = null;
     if (cb == null) return;
-    Uri[] out = null;
-    if (res == RESULT_OK && data != null && data.getData() != null) out = new Uri[]{data.getData()};
-    cb.onReceiveValue(out);
+    if (res != RESULT_OK || data == null || data.getData() == null) {
+      cb.onReceiveValue(null);
+      return;
+    }
+    // Google ドライブなどのファイルを WebView に直接読ませると、端末にまだ無いときに
+    // 受信待ちのまま止まることがある。先にアプリ内へ写し取ってから渡す。
+    copyThenDeliver(data.getData(), cb);
+  }
+
+  private void copyThenDeliver(final Uri src, final ValueCallback<Uri[]> cb) {
+    final int gen = ++copyGen;
+    progressJs("start", 0, -1, 0);
+    new Thread(() -> {
+      // 名前と大きさの問い合わせもクラウド側で待たされることがあるので、画面のスレッドでは行わない
+      final String name = displayName(src);
+      final long size = declaredSize(src);
+      File dir = new File(getCacheDir(), "pick");
+      File out = new File(dir, name);
+      String err = null;
+      for (int attempt = 1; attempt <= MAX_TRIES; attempt++) {
+        if (gen != copyGen) { ui.post(() -> cb.onReceiveValue(null)); return; }
+        try {
+          if (!dir.exists() && !dir.mkdirs()) throw new IOException("作業用の場所を作れません");
+          File[] old = dir.listFiles();
+          if (old != null) for (File f : old) //noinspection ResultOfMethodCallIgnored
+            f.delete();
+          copyWithWatchdog(src, out, size, attempt, gen);
+          if (out.length() == 0) throw new IOException("空のファイルです");
+          if (size > 0 && out.length() != size) throw new IOException("途中までしか受け取れませんでした");
+          err = null;
+          break;
+        } catch (Exception e) {
+          err = e.getMessage() != null ? e.getMessage() : e.toString();
+          if (attempt < MAX_TRIES) {
+            progressJs("retry", 0, size, attempt + 1);
+            try { Thread.sleep(800L * attempt); } catch (InterruptedException ie) { ui.post(() -> cb.onReceiveValue(null)); return; }
+          }
+        }
+      }
+      final String fErr = err;
+      ui.post(() -> {
+        if (gen != copyGen) { cb.onReceiveValue(null); return; }
+        if (fErr != null && !(out.exists() && out.length() > 0)) {
+          progressJs("fail", 0, size, 0);
+          Toast.makeText(this, "ファイルを受け取れませんでした: " + fErr, Toast.LENGTH_LONG).show();
+          cb.onReceiveValue(null);
+          return;
+        }
+        try {
+          Uri local = FileProvider.getUriForFile(this, getPackageName() + ".files", out);
+          cb.onReceiveValue(new Uri[]{local});
+        } catch (Exception e) {
+          // 写しを渡せないときは、元の場所をそのまま渡す（従来どおり）
+          cb.onReceiveValue(new Uri[]{src});
+        }
+      });
+    }, "pick-copy").start();
+  }
+
+  /**
+   * 写し取りを別スレッドで行い、受信が STALL_MS 止まったらその試行を見捨てて例外にする。
+   * ドライブの「開く」自体が戻ってこない場合もあるので、待つ側はこちらで握る。
+   */
+  private void copyWithWatchdog(Uri src, File out, long size, int attempt, int gen) throws IOException {
+    final AtomicLong last = new AtomicLong(System.currentTimeMillis());
+    final AtomicBoolean abandoned = new AtomicBoolean(false);
+    final InputStream[] stream = new InputStream[1];
+    final IOException[] failure = new IOException[1];
+    final File tmp = new File(out.getParentFile(), out.getName() + ".part" + attempt);
+    Thread worker = new Thread(() -> {
+      InputStream in = null;
+      try {
+        in = getContentResolver().openInputStream(src);
+        if (in == null) throw new IOException("ファイルを開けません");
+        synchronized (stream) { stream[0] = in; }
+        if (abandoned.get()) return;
+        last.set(System.currentTimeMillis());
+        try (OutputStream os = new FileOutputStream(tmp)) {
+          byte[] buf = new byte[64 * 1024];
+          long total = 0, lastReport = 0;
+          int n;
+          while ((n = in.read(buf)) != -1) {
+            if (abandoned.get() || gen != copyGen) return;
+            os.write(buf, 0, n);
+            total += n;
+            last.set(System.currentTimeMillis());
+            if (total - lastReport > 256 * 1024) {
+              lastReport = total;
+              progressJs("copy", total, size, attempt);
+            }
+          }
+          progressJs("copy", total, size, attempt);
+        }
+      } catch (IOException e) {
+        failure[0] = e;
+      } catch (Exception e) {
+        failure[0] = new IOException(e.toString());
+      } finally {
+        if (in != null) try { in.close(); } catch (IOException ignore) { }
+      }
+    }, "pick-copy-" + attempt);
+    worker.setDaemon(true);
+    worker.start();
+    while (worker.isAlive()) {
+      try { worker.join(500); } catch (InterruptedException e) { abandoned.set(true); throw new IOException("取り消されました"); }
+      if (gen != copyGen) { abandoned.set(true); throw new IOException("取り消されました"); }
+      if (worker.isAlive() && System.currentTimeMillis() - last.get() > STALL_MS) {
+        abandoned.set(true);
+        synchronized (stream) { if (stream[0] != null) try { stream[0].close(); } catch (Exception ignore) { } }
+        //noinspection ResultOfMethodCallIgnored
+        tmp.delete();
+        throw new IOException("受信が止まりました");
+      }
+    }
+    if (failure[0] != null) { //noinspection ResultOfMethodCallIgnored
+      tmp.delete(); throw failure[0]; }
+    if (out.exists()) //noinspection ResultOfMethodCallIgnored
+      out.delete();
+    if (!tmp.renameTo(out)) throw new IOException("控えを保存できません");
+  }
+
+  private void progressJs(String phase, long done, long total, int attempt) {
+    final String js = "(function(){try{window.OrderViewNative&&OrderViewNative.pickProgress&&OrderViewNative.pickProgress('"
+        + phase + "'," + done + "," + total + "," + attempt + ");}catch(e){}})()";
+    ui.post(() -> { if (web != null) web.evaluateJavascript(js, null); });
+  }
+
+  private String displayName(Uri u) {
+    String name = null;
+    try (Cursor c = getContentResolver().query(u, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+      if (c != null && c.moveToFirst() && !c.isNull(0)) name = c.getString(0);
+    } catch (Exception ignore) { }
+    if (name == null || name.trim().isEmpty()) name = "book.xlsx";
+    return name.replaceAll("[\\\\/:*?\"<>|\\u0000-\\u001f]", "_");
+  }
+
+  private long declaredSize(Uri u) {
+    try (Cursor c = getContentResolver().query(u, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+      if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+    } catch (Exception ignore) { }
+    return -1;
   }
 
   @Override
