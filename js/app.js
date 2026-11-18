@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.13.1';
+  const APP_VERSION = '1.13.2';
   const APP_DATE = '2026-09-17';
   const START_SHEET = '直近';
   const ALWAYS_RE = /在庫警告/;   // 位置にかかわらず表示対象にするシート
@@ -402,7 +402,8 @@
       const targets = targetSheets();
       if (!targets.length) throw new Error('表示対象のシート（直近・所要(調整)より右）が見つかりませんでした。');
       if (!fromCache) {
-        try { await idbPut('last', Object.assign({ buffer }, meta)); } catch (e) { console.warn('cache failed', e); }
+        // 保存は表示と並行して進める（大きいファイルで最初の表示を待たせない）
+        idbPut('last', Object.assign({ buffer }, meta)).catch((e) => console.warn('cache failed', e));
       }
       const first = (state.lastSheet && book.sheets.find((t) => t.name === state.lastSheet && t.state === 'visible' && (isTarget(t.index, book.allSheetNames) || state.opts.allSheets))) || targets[0];
       showViewer();
@@ -435,13 +436,47 @@
       return;
     }
     overlay(true, 'ファイルを読み込み中…', 1);
+    let buffer;
     try {
-      const buffer = await file.arrayBuffer();
-      await openBuffer(buffer, { name: file.name, size: file.size, lastModified: file.lastModified, savedAt: Date.now() }, false);
+      buffer = await readFileBytes(file);
     } catch (err) {
+      console.error(err);
       overlay(false);
-      toast('ファイルを読めませんでした', true);
+      toast('ファイルを読めませんでした。Google ドライブのファイルは、端末にダウンロードしてから選ぶと確実です', true);
+      return;
     }
+    await openBuffer(buffer, { name: file.name, size: file.size, lastModified: file.lastModified, savedAt: Date.now() }, false);
+  }
+
+  /**
+   * 選んだファイルを最後まで読み切る。クラウド上のファイルは途中で途切れることがあるので、
+   * 読み方を変えて最大 3 回まで試し、大きさが合っているかも確かめる。
+   */
+  async function readFileBytes(file) {
+    const viaReader = () => new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(fr.error || new Error('read error'));
+      fr.readAsArrayBuffer(file);
+    });
+    const ways = [() => file.arrayBuffer(), viaReader, () => file.arrayBuffer()];
+    let lastErr = null;
+    let best = null; // 大きさが申告と違っても、いちばん多く読めたものは最後の手段として残す
+    for (let i = 0; i < ways.length; i++) {
+      try {
+        const buf = await ways[i]();
+        if (!buf || !buf.byteLength) throw new Error('空のファイルです');
+        if (!best || buf.byteLength > best.byteLength) best = buf;
+        if (file.size && buf.byteLength !== file.size) throw new Error(`途中までしか読めませんでした (${buf.byteLength}/${file.size})`);
+        return buf;
+      } catch (e) {
+        lastErr = e;
+        console.warn('read attempt failed', i + 1, e);
+        if (i < ways.length - 1) { overlay(true, 'ファイルを読み直しています…', 1); await new Promise((r) => setTimeout(r, 300 * (i + 1))); }
+      }
+    }
+    if (best) return best; // 中身が壊れていれば展開時に分かりやすく知らせる
+    throw lastErr;
   }
 
   async function openRecent() {

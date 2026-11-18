@@ -5,7 +5,7 @@
  * alignment, merges, column widths, hidden rows/cols, freeze panes) and only
  * for the sheets requested, so a large workbook stays fast on a phone.
  *
- * Requires JSZip (window.JSZip).
+ * ZIP は端末標準の DecompressionStream で展開し、使えない場合は JSZip (window.JSZip) を使う。
  */
 (function (global) {
   'use strict';
@@ -263,22 +263,26 @@
 
   // ---------- shared strings ----------
 
+  const SI_RE = /<si>([\s\S]*?)<\/si>|<si\/>/g;
+  const RPH_RE = /<rPh\b[\s\S]*?<\/rPh>/g;
+  const T_RE = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>|<t(?:\s[^>]*)?\/>/g;
+
+  /** 共有文字列表。DOM を作らず正規表現で読む（大きな表で数倍速い）。 */
   function parseSharedStrings(xml) {
     const out = [];
     if (!xml) return out;
-    const doc = parseDom(xml);
-    const sst = doc.documentElement;
-    for (const si of Array.from(sst.children)) {
-      if (si.localName !== 'si') continue;
+    SI_RE.lastIndex = 0;
+    let m;
+    while ((m = SI_RE.exec(xml))) {
+      let body = m[1];
+      if (!body) { out.push(''); continue; }
+      // rPh (phonetic/furigana) runs are intentionally skipped
+      if (body.indexOf('<rPh') !== -1) body = body.replace(RPH_RE, '');
       let text = '';
-      for (const ch of Array.from(si.children)) {
-        if (ch.localName === 't') text += ch.textContent;
-        else if (ch.localName === 'r') {
-          for (const t of Array.from(ch.children)) if (t.localName === 't') text += t.textContent;
-        }
-        // rPh (phonetic/furigana) runs are intentionally skipped
-      }
-      out.push(text);
+      T_RE.lastIndex = 0;
+      let t;
+      while ((t = T_RE.exec(body))) if (t[1]) text += t[1];
+      out.push(decodeXml(text));
     }
     return out;
   }
@@ -289,6 +293,37 @@
   const CELL_RE = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
   const V_RE = /<v>([\s\S]*?)<\/v>/;
   const IS_T_RE = /<t[^>]*>([\s\S]*?)<\/t>/g;
+
+  /** セルの属性 r / s / t だけを手早く取り出す（オブジェクトを都度作る attrs() より速い）。 */
+  const CA_OUT = { r: null, s: 0, t: 'n' };
+  function cellAttrs(str) {
+    CA_OUT.r = null; CA_OUT.s = 0; CA_OUT.t = 'n';
+    const len = str.length;
+    let i = 0;
+    while (i < len) {
+      const eq = str.indexOf('="', i);
+      if (eq < 0) break;
+      const end = str.indexOf('"', eq + 2);
+      if (end < 0) break;
+      let k = eq - 1;
+      while (k >= 0 && str.charCodeAt(k) > 32) k--;
+      const key = str.slice(k + 1, eq);
+      if (key === 'r') {
+        // "AB12" → 列・行
+        let c = 0, j = eq + 2;
+        for (; j < end; j++) {
+          const ch = str.charCodeAt(j);
+          if (ch < 65 || ch > 90) break;
+          c = c * 26 + (ch - 64);
+        }
+        const r = parseInt(str.slice(j, end), 10);
+        CA_OUT.r = c && r ? { c, r } : null;
+      } else if (key === 's') CA_OUT.s = parseInt(str.slice(eq + 2, end), 10) || 0;
+      else if (key === 't') CA_OUT.t = str.slice(eq + 2, end);
+      i = end + 1;
+    }
+    return CA_OUT;
+  }
 
   function parseSheet(xml, ctx) {
     const sheet = {
@@ -362,14 +397,14 @@
         CELL_RE.lastIndex = 0;
         let cm;
         while ((cm = CELL_RE.exec(rm[2]))) {
-          const ca = attrs(cm[1]);
-          const ref = parseRef(ca.r || '');
+          const ca = cellAttrs(cm[1]);
+          const ref = ca.r;
           if (!ref) continue;
-          const s = ca.s ? parseInt(ca.s, 10) : 0;
+          const s = ca.s;
           let v = null, t = 'n';
           const body = cm[2];
           if (body) {
-            const type = ca.t || 'n';
+            const type = ca.t;
             if (type === 'inlineStr') {
               let txt = '';
               IS_T_RE.lastIndex = 0;
@@ -414,9 +449,95 @@
 
   // ---------- workbook ----------
 
-  async function readText(zip, path) {
-    const f = zip.file(path) || zip.file(path.replace(/^\//, ''));
-    return f ? f.async('string') : null;
+  // ---------- zip ----------
+  // 端末の標準機能 (DecompressionStream) で展開する軽量な ZIP 読み取り。
+  // 使えない端末や想定外の ZIP では JSZip に切り替える。
+
+  const utf8 = new TextDecoder('utf-8');
+
+  function openZipNative(buffer) {
+    if (typeof DecompressionStream === 'undefined') return null;
+    try { new DecompressionStream('deflate-raw'); } catch (e) { return null; }
+    const u8 = new Uint8Array(buffer);
+    const dv = new DataView(buffer);
+    // End of central directory (末尾 64KB + 22 バイト以内)
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return null;
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    if (count === 0xffff || p === 0xffffffff) return null; // ZIP64 は JSZip に任せる
+    const entries = new Map();
+    for (let n = 0; n < count; n++) {
+      if (p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) return null;
+      const flags = dv.getUint16(p + 8, true);
+      const method = dv.getUint16(p + 10, true);
+      const csize = dv.getUint32(p + 20, true);
+      const usize = dv.getUint32(p + 24, true);
+      const nlen = dv.getUint16(p + 28, true);
+      const elen = dv.getUint16(p + 30, true);
+      const clen = dv.getUint16(p + 32, true);
+      const off = dv.getUint32(p + 42, true);
+      const name = utf8.decode(u8.subarray(p + 46, p + 46 + nlen));
+      entries.set(name.toLowerCase(), { name, flags, method, csize, usize, off });
+      p += 46 + nlen + elen + clen;
+    }
+    async function bytes(path) {
+      const e = entries.get(path.replace(/^\//, '').toLowerCase());
+      if (!e) return null;
+      if (e.flags & 1) throw new Error('パスワード付きのファイルは開けません。');
+      if (dv.getUint32(e.off, true) !== 0x04034b50) throw new Error('bad local header');
+      const start = e.off + 30 + dv.getUint16(e.off + 26, true) + dv.getUint16(e.off + 28, true);
+      const raw = u8.subarray(start, start + e.csize);
+      if (e.method === 0) return raw;
+      if (e.method !== 8) throw new Error('unsupported compression ' + e.method);
+      const out = await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+      if (e.usize && out.byteLength !== e.usize) throw new Error('size mismatch');
+      return new Uint8Array(out);
+    }
+    return {
+      has: (path) => entries.has(path.replace(/^\//, '').toLowerCase()),
+      text: async (path) => { const b = await bytes(path); return b ? utf8.decode(b) : null; },
+    };
+  }
+
+  async function openZipJs(buffer) {
+    const zip = await global.JSZip.loadAsync(buffer);
+    const file = (path) => zip.file(path) || zip.file(path.replace(/^\//, ''));
+    return {
+      has: (path) => !!file(path),
+      text: async (path) => { const f = file(path); return f ? utf8.decode(await f.async('uint8array')) : null; },
+    };
+  }
+
+  /** 標準機能で読み、途中で失敗したら JSZip でもう一度読む。 */
+  async function openZip(buffer) {
+    const u8 = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+    if (!(u8[0] === 0x50 && u8[1] === 0x4b)) {
+      throw new Error('Excel ブック (xlsx / xlsm) ではありません。ファイルが壊れているか、別の形式です。');
+    }
+    let native = null;
+    try { native = openZipNative(buffer); } catch (e) { native = null; }
+    if (!native) return openZipJs(buffer);
+    let fallback = null;
+    return {
+      has: (path) => native.has(path),
+      text: async (path) => {
+        if (fallback) return fallback.text(path);
+        try { return await native.text(path); } catch (e) {
+          if (/パスワード/.test(e.message)) throw e;
+          console.warn('native unzip failed, using JSZip', e);
+          fallback = await openZipJs(buffer);
+          return fallback.text(path);
+        }
+      },
+    };
+  }
+
+  function readText(zip, path) {
+    return zip.text(path);
   }
 
   /**
@@ -428,13 +549,15 @@
   async function openWorkbook(buffer, onProgress) {
     const progress = onProgress || (() => {});
     progress('ファイルを展開中…', 5);
-    const zip = await global.JSZip.loadAsync(buffer);
+    const zip = await openZip(buffer);
     const wbXml = await readText(zip, 'xl/workbook.xml');
     if (!wbXml) throw new Error('Excel ブック (xlsx / xlsm) として読み込めませんでした。');
-    const relsXml = await readText(zip, 'xl/_rels/workbook.xml.rels');
-    const stylesXml = await readText(zip, 'xl/styles.xml');
-    const themeXml = await readText(zip, 'xl/theme/theme1.xml');
-    const sstXml = await readText(zip, 'xl/sharedStrings.xml');
+    const [relsXml, stylesXml, themeXml, sstXml] = await Promise.all([
+      readText(zip, 'xl/_rels/workbook.xml.rels'),
+      readText(zip, 'xl/styles.xml'),
+      readText(zip, 'xl/theme/theme1.xml'),
+      readText(zip, 'xl/sharedStrings.xml'),
+    ]);
 
     progress('書式を読み込み中…', 10);
     const theme = parseTheme(themeXml);
